@@ -14,18 +14,14 @@ export const GAS_SCRIPTS = {
  * Target Spreadsheet: https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit
  */
 
-const TARGET_SPREADSHEET_ID = '${DEFAULT_SPREADSHEET_ID}';
-
-function getSpreadsheet() {
-  try {
-    const active = SpreadsheetApp.getActiveSpreadsheet();
-    if (active) return active;
-  } catch (e) {}
-  return SpreadsheetApp.openById(TARGET_SPREADSHEET_ID);
-}
-
 function initializeRetailAttendanceSheets() {
-  const ss = getSpreadsheet();
+  var ss;
+  try {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) ss = SpreadsheetApp.openById('${DEFAULT_SPREADSHEET_ID}');
+  } catch (e) {
+    ss = SpreadsheetApp.openById('${DEFAULT_SPREADSHEET_ID}');
+  }
   
   const SHEETS_SCHEMA = {
     'CONFIG': [
@@ -96,7 +92,7 @@ function initializeRetailAttendanceSheets() {
  * Target Spreadsheet: https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit
  */
 
-const TARGET_SPREADSHEET_ID = '${DEFAULT_SPREADSHEET_ID}';
+var TARGET_SPREADSHEET_ID = '${DEFAULT_SPREADSHEET_ID}';
 
 function getSpreadsheet() {
   try {
