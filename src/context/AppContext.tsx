@@ -22,6 +22,7 @@ import {
   DEFAULT_AUDIT_LOGS,
 } from '../data/defaultData';
 import { findNearestLocation } from '../utils/geo';
+import { getLocalTodayDate, isDateToday, normalizeDateString } from '../utils/dateUtils';
 import { DEFAULT_SPREADSHEET_URL, DEFAULT_SPREADSHEET_ID } from '../utils/gasExporter';
 import { DEFAULT_GAS_URL } from '../config/gasConfig';
 import {
@@ -40,8 +41,10 @@ interface AppContextType {
   updateConfig: (newConfig: Partial<AppConfig>) => void;
   locations: LocationMaster[];
   updateLocations: (locations: LocationMaster[]) => void;
+  calibrateLocation: (locationId: string, lat: number, lon: number, newName?: string) => void;
   manpower: Manpower[];
   updateManpower: (manpower: Manpower[]) => void;
+  toggleUserFlexible: (targetNik?: string) => void;
   attendance: AttendanceRecord[];
   requests: RequestRecord[];
   approvals: ApprovalRecord[];
@@ -368,6 +371,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setGpsError(null);
   };
 
+  const calibrateLocation = (locationId: string, lat: number, lon: number, newName?: string) => {
+    setLocations((prev) => {
+      const exists = prev.some((l) => l.locationId === locationId);
+      let updated: LocationMaster[];
+      if (exists) {
+        updated = prev.map((loc) =>
+          loc.locationId === locationId
+            ? {
+                ...loc,
+                latitude: parseFloat(lat.toFixed(6)),
+                longitude: parseFloat(lon.toFixed(6)),
+                locationName: newName || loc.locationName,
+              }
+            : loc
+        );
+      } else {
+        const newLoc: LocationMaster = {
+          locationId,
+          locationName: newName || 'Toko Saya (GPS Aktif)',
+          locationType: 'Retail Store',
+          address: 'Lokasi Toko Fisik Terdaftar GPS',
+          latitude: parseFloat(lat.toFixed(6)),
+          longitude: parseFloat(lon.toFixed(6)),
+          radiusMeter: 150,
+          status: 'ACTIVE',
+        };
+        updated = [newLoc, ...prev];
+      }
+      localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(updated));
+      return updated;
+    });
+
+    addAuditLog({
+      nik: currentUser?.nik || 'SYSTEM',
+      user: currentUser ? `${currentUser.employeeName} (${currentUser.roleLevel})` : 'System',
+      action: 'Calibrate Location GPS',
+      referenceId: locationId,
+      oldValue: 'ORIGINAL_COORDS',
+      newValue: `${lat.toFixed(6)}, ${lon.toFixed(6)}`,
+      description: `Lokasi toko ${locationId} disinkronkan ke koordinat GPS fisik (${lat.toFixed(6)}, ${lon.toFixed(6)}). Jarak toko menjadi 0m.`,
+    });
+  };
+
+  const toggleUserFlexible = (targetNik?: string) => {
+    const nik = targetNik || currentUserNik;
+    if (!nik) return;
+    setManpower((prev) => {
+      const updated = prev.map((m) =>
+        m.nik === nik ? { ...m, flexibleAttendance: !m.flexibleAttendance } : m
+      );
+      localStorage.setItem(STORAGE_KEYS.MANPOWER, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
   // Auth methods
   const login = (nik: string) => {
     const found = manpower.find((m) => m.nik.trim() === nik.trim());
@@ -446,12 +504,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentUser) return { success: false, message: 'User is not logged in.' };
     if (!config.allowClockIn) return { success: false, message: 'Clock In is currently disabled by administrator.' };
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalTodayDate();
     const nowTimeStr = new Date().toTimeString().split(' ')[0];
 
-    // Check if user already clocked in today
+    // Check if user already clocked in today (supports multiple date formats & timezones)
     const existingIn = attendance.find(
-      (a) => a.nik === currentUser.nik && a.date === todayStr && a.type === 'IN'
+      (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
     );
     if (existingIn) {
       return { success: false, message: `You have already clocked in today at ${existingIn.time}.` };
@@ -532,6 +590,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    // Optimistically update local attendance state so Clock Out and UI are immediately available
+    setAttendance((prev) => [newRecord, ...prev.filter((a) => a.attendanceId !== newRecord.attendanceId)]);
+    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([newRecord, ...attendance.filter((a) => a.attendanceId !== newRecord.attendanceId)]));
+
     // Refresh directly from Google Sheets
     await syncFromSpreadsheet();
 
@@ -552,12 +614,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentUser) return { success: false, message: 'User is not logged in.' };
     if (!config.allowClockOut) return { success: false, message: 'Clock Out is currently disabled by administrator.' };
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalTodayDate();
     const nowTimeStr = new Date().toTimeString().split(' ')[0];
 
-    // Business rule: User cannot clock out if there is no valid clock in
+    // Business rule: User cannot clock out if there is no valid clock in (with robust date normalization)
     const existingIn = attendance.find(
-      (a) => a.nik === currentUser.nik && a.date === todayStr && a.type === 'IN'
+      (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
     );
     if (!existingIn) {
       return { success: false, message: 'Clock Out gagal. Anda belum melakukan Clock In hari ini.' };
@@ -565,10 +627,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Business rule: User cannot clock out twice
     const existingOut = attendance.find(
-      (a) => a.nik === currentUser.nik && a.date === todayStr && a.type === 'OUT'
+      (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'OUT'
     );
     if (existingOut) {
       return { success: false, message: `You have already clocked out today at ${existingOut.time}.` };
+    }
+
+    // Biometric Validation
+    if (config.requireFaceRecognition && !options?.faceVerified) {
+      addAuditLog({
+        nik: currentUser.nik,
+        user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
+        action: 'Failed Face Recognition',
+        referenceId: 'FACE_REJECTED',
+        oldValue: 'UNVERIFIED',
+        newValue: 'REJECTED',
+        description: 'Clock Out gagal: Verifikasi biometrik wajah tidak cocok atau dilewati.',
+      });
+      return { success: false, message: 'Clock Out gagal. Verifikasi wajah wajib dan harus cocok dengan template biometrik Anda.' };
     }
 
     // Geolocation Validation
@@ -629,6 +705,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message: `Gagal mencatat Clock Out ke Spreadsheet: ${res.message}. Pastikan deployment Apps Script diset ke 'Anyone'.`,
       };
     }
+
+    // Optimistically update local attendance state so UI reflects Clock Out immediately
+    setAttendance((prev) => [newRecord, ...prev.filter((a) => a.attendanceId !== newRecord.attendanceId)]);
+    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([newRecord, ...attendance.filter((a) => a.attendanceId !== newRecord.attendanceId)]));
 
     // Refresh directly from Google Sheets
     await syncFromSpreadsheet();
@@ -1007,8 +1087,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateConfig,
         locations,
         updateLocations: setLocations,
+        calibrateLocation,
         manpower,
         updateManpower: setManpower,
+        toggleUserFlexible,
         attendance,
         requests,
         approvals,

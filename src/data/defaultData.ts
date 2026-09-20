@@ -14,7 +14,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   attendanceRetentionDays: 90,
   allowFaceRegistration: true,
   requireFaceRecognition: true,
-  faceMatchThreshold: 0.65,
+  faceMatchThreshold: 0.70,
   faceConsentRequired: true,
   allowClockIn: true,
   allowClockOut: true,

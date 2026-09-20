@@ -8,6 +8,7 @@ import {
   FaceRegisterRecord,
   AuditLogRecord,
 } from '../types';
+import { normalizeDateString } from '../utils/dateUtils';
 
 /**
  * Parses Google Visualization API (gviz/tq) response JSON
@@ -63,7 +64,7 @@ export async function fetchLiveAttendance(spreadsheetId: string): Promise<Attend
         attendanceId: id,
         nik: String(row[1] || '').trim(),
         employeeName: String(row[2] || '').trim(),
-        date: String(row[3] || '').trim(),
+        date: normalizeDateString(row[3]),
         time: String(row[4] || '').trim(),
         type: (String(row[5] || '').toUpperCase() === 'OUT' ? 'OUT' : 'IN') as 'IN' | 'OUT',
         locationId: String(row[6] || '').trim(),

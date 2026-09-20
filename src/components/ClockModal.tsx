@@ -34,6 +34,10 @@ export const ClockModal: React.FC<ClockModalProps> = ({
     clockIn,
     clockOut,
     faceRegisters,
+    setSimulatedLocation,
+    calibrateLocation,
+    toggleUserFlexible,
+    userCoords,
   } = useApp();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -116,7 +120,7 @@ export const ClockModal: React.FC<ClockModalProps> = ({
       }
 
       const liveVector = extractFaceEmbeddingFromVideo(videoRef.current);
-      const threshold = config.faceMatchThreshold || 0.65;
+      const threshold = config.faceMatchThreshold || 0.70;
       const comp = verifyFaceAgainstTemplate(liveVector, registered.faceTemplate, threshold);
       biometricScore = comp.score;
 
@@ -281,9 +285,38 @@ export const ClockModal: React.FC<ClockModalProps> = ({
                 Nearest Store: <strong>{geoStatus.location?.locationName || 'Unknown'}</strong> (Max Radius: {geoStatus.allowedRadius}m)
               </p>
               {!isGpsOk && !isFlexible && (
-                <p className="text-[11px] text-rose-700 font-medium pt-1">
-                  You are {geoStatus.distance} meters away. Clock {type} will be blocked and recorded in Audit Log.
-                </p>
+                <div className="pt-2 space-y-2 border-t border-rose-200 mt-2">
+                  <p className="text-[11px] text-rose-800 font-medium leading-relaxed">
+                    Jarak terdeteksi <strong>{geoStatus.distance >= 1000 ? `${(geoStatus.distance / 1000).toFixed(1)} km (${geoStatus.distance.toLocaleString()}m)` : `${geoStatus.distance}m`}</strong> dari toko <strong>{geoStatus.location?.locationName || 'Ruko Puri Indah'}</strong> di Jakarta Barat.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const locId = currentUser?.homebaseLocationId || geoStatus.location?.locationId || 'LOC001';
+                        const locName = geoStatus.location?.locationName || 'Toko Saya';
+                        calibrateLocation(locId, userCoords.latitude, userCoords.longitude, locName);
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition-colors shadow-xs"
+                    >
+                      Set Toko ke GPS Saya (Jarak Jadi 0m)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleUserFlexible()}
+                      className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] transition-colors shadow-xs"
+                    >
+                      Mode WFA / Bebas Radius
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSimulatedLocation(-6.18562, 106.73448, 'Ruko Puri (14m - In Radius)')}
+                      className="px-2 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium text-[11px] transition-colors"
+                    >
+                      Simulasi Puri (14m)
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
