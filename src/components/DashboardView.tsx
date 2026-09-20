@@ -105,15 +105,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </p>
           </div>
 
-          {/* Quick Face Register Button if not registered */}
-          {!currentUser.faceRegistered && config.requireFaceRecognition && (
-            <button
-              onClick={() => setShowFaceRegModal(true)}
-              className="self-start sm:self-auto flex items-center gap-2 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs shadow-md transition-all animate-bounce"
-            >
-              <Camera className="w-4 h-4" />
-              <span>Daftar Wajah (Face Biometric)</span>
-            </button>
+          {/* Quick Face Register Button & Status */}
+          {config.requireFaceRecognition && (
+            !currentUser.faceRegistered ? (
+              <button
+                onClick={() => setShowFaceRegModal(true)}
+                className="self-start sm:self-auto flex items-center gap-2 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs shadow-md transition-all animate-bounce"
+                title="Wajah belum terdaftar. Klik untuk mendaftarkan biometrik wajah Anda."
+              >
+                <Camera className="w-4 h-4" />
+                <span>Daftar Wajah (Face Biometric)</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowFaceRegModal(true)}
+                className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-emerald-300 border border-emerald-400/30 rounded-xl text-xs font-semibold transition-all backdrop-blur-xs"
+                title="Wajah sudah terdaftar. Klik untuk scan ulang atau memperbarui template wajah."
+              >
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>Wajah Terdaftar</span>
+                <span className="text-[10px] text-emerald-200/80 font-normal underline ml-0.5">(Update Wajah)</span>
+              </button>
+            )
           )}
         </div>
 
