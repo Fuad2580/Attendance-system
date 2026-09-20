@@ -1,0 +1,9 @@
+{
+  "name": "Retail Attendance Management",
+  "description": "Mobile-first Retail Attendance Management Web App powered by Google Sheets and Google Apps Script.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
