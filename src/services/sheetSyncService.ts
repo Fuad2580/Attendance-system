@@ -11,6 +11,32 @@ import {
 import { normalizeDateString } from '../utils/dateUtils';
 
 /**
+ * Safely parses numeric values such as coordinates, radius, or distance.
+ * Handles both international decimal dot (-6.1856) and Indonesian decimal comma (-6,1856).
+ */
+export function parseCoordinate(val: any, defaultVal = 0): number {
+  if (val === undefined || val === null || val === '') return defaultVal;
+  if (typeof val === 'number') return isNaN(val) ? defaultVal : val;
+  const str = String(val).trim();
+  if (!str) return defaultVal;
+
+  let normalized = str;
+  if (str.includes(',') && !str.includes('.')) {
+    // Indonesian format: e.g. "-6,1856" or "106,7345"
+    normalized = str.replace(',', '.');
+  } else if (str.includes(',') && str.includes('.')) {
+    if (str.lastIndexOf(',') > str.lastIndexOf('.')) {
+      normalized = str.replace(/\./g, '').replace(',', '.');
+    } else {
+      normalized = str.replace(/,/g, '');
+    }
+  }
+
+  const parsed = parseFloat(normalized);
+  return isNaN(parsed) ? defaultVal : parsed;
+}
+
+/**
  * Parses Google Visualization API (gviz/tq) response JSON
  */
 async function fetchGvizSheet(spreadsheetId: string, sheetName: string): Promise<any[][]> {
@@ -39,6 +65,8 @@ async function fetchGvizSheet(spreadsheetId: string, sheetName: string): Promise
   return rows.map((r: any) =>
     (r.c || []).map((cell: any) => {
       if (!cell) return '';
+      // If raw value is already a number, return it to preserve exact float
+      if (typeof cell.v === 'number') return cell.v;
       if (cell.f !== undefined && cell.f !== null) return cell.f;
       return cell.v !== undefined && cell.v !== null ? cell.v : '';
     })
@@ -70,10 +98,10 @@ export async function fetchLiveAttendance(spreadsheetId: string): Promise<Attend
         locationId: String(row[6] || '').trim(),
         locationName: String(row[7] || '').trim(),
         homebase: String(row[8] || '').trim(),
-        latitude: parseFloat(row[9]) || 0,
-        longitude: parseFloat(row[10]) || 0,
-        accuracy: parseFloat(row[11]) || 0,
-        distance: parseFloat(row[12]) || 0,
+        latitude: parseCoordinate(row[9]),
+        longitude: parseCoordinate(row[10]),
+        accuracy: parseCoordinate(row[11]),
+        distance: parseCoordinate(row[12]),
         attendanceMode: String(row[13] || '').toUpperCase() === 'FLEXIBLE' ? 'FLEXIBLE' : 'STANDARD',
         faceVerified: String(row[14]).toUpperCase() === 'TRUE' || row[14] === true,
         status: (String(row[15] || '').toUpperCase() as any) || 'VERIFIED',
@@ -168,9 +196,9 @@ export async function fetchLiveLocations(spreadsheetId: string): Promise<Locatio
         locationName: String(row[1] || '').trim(),
         locationType: String(row[2] || '').trim(),
         address: String(row[3] || '').trim(),
-        latitude: parseFloat(row[4]) || 0,
-        longitude: parseFloat(row[5]) || 0,
-        radiusMeter: parseFloat(row[6]) || 100,
+        latitude: parseCoordinate(row[4]),
+        longitude: parseCoordinate(row[5]),
+        radiusMeter: parseCoordinate(row[6], 100),
         status: String(row[7] || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
       });
     }

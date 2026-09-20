@@ -11,7 +11,7 @@ import {
   Sparkles,
   Lock,
 } from 'lucide-react';
-import { extractFaceEmbeddingFromVideo } from '../utils/faceBiometrics';
+import { extractFaceEmbeddingFromVideo, zeroMeanUnitNormalize } from '../utils/faceBiometrics';
 
 interface FaceRegistrationModalProps {
   onClose: () => void;
@@ -91,8 +91,7 @@ export const FaceRegistrationModal: React.FC<FaceRegistrationModalProps> = ({ on
         avgVector[i] += vec[i];
       }
     }
-    const norm = Math.sqrt(avgVector.reduce((acc, v) => acc + v * v, 0)) || 1;
-    const finalVector = avgVector.map((v) => v / norm);
+    const finalVector = zeroMeanUnitNormalize(avgVector);
 
     const vectorJson = JSON.stringify(finalVector);
     const res = await registerFaceTemplate(currentUser.nik, vectorJson);

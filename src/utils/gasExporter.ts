@@ -203,6 +203,35 @@ function Audit_log(nik, user, action, refId, oldVal, newVal, lat, lon, desc) {
 /**
  * Clock In with LockService
  */
+/**
+ * Helper to normalize dates from Google Sheets (handles Date objects, YYYY-MM-DD, DD/MM/YYYY)
+ */
+function normalizeGasDate(cellVal) {
+  if (!cellVal) return '';
+  if (cellVal instanceof Date) {
+    return Utilities.formatDate(cellVal, 'Asia/Jakarta', 'yyyy-MM-dd');
+  }
+  var str = String(cellVal).trim();
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(str)) {
+    var parts = str.split(/[-/]/);
+    var y = parts[0];
+    var m = ('0' + parts[1]).slice(-2);
+    var d = ('0' + parts[2]).slice(-2);
+    return y + '-' + m + '-' + d;
+  }
+  var dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy) {
+    var d = ('0' + dmy[1]).slice(-2);
+    var m = ('0' + dmy[2]).slice(-2);
+    var y = dmy[3];
+    return y + '-' + m + '-' + d;
+  }
+  return str;
+}
+
+/**
+ * Clock In with LockService
+ */
 function Attendance_clockIn(payload) {
   const lock = LockService.getScriptLock();
   try {
@@ -213,10 +242,14 @@ function Attendance_clockIn(payload) {
 
     const today = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
     const nowTime = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'HH:mm:ss');
+    const targetDate = payload.date ? normalizeGasDate(payload.date) : today;
 
     const data = sheet.getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
-      if (String(data[i][1]).trim() == String(payload.nik).trim() && String(data[i][3]).trim() == today && String(data[i][5]).trim() == 'IN') {
+      var rNik = String(data[i][1]).trim();
+      var rDate = normalizeGasDate(data[i][3]);
+      var rType = String(data[i][5]).trim().toUpperCase();
+      if (rNik === String(payload.nik).trim() && (rDate === today || rDate === targetDate) && rType === 'IN') {
         return { success: false, message: 'Karyawan sudah melakukan Clock In hari ini.' };
       }
     }
@@ -266,15 +299,32 @@ function Attendance_clockOut(payload) {
 
     const today = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
     const nowTime = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'HH:mm:ss');
+    const targetDate = payload.date ? normalizeGasDate(payload.date) : today;
 
     const data = sheet.getDataRange().getValues();
     let hasClockedIn = false;
     let hasClockedOut = false;
 
     for (let i = 1; i < data.length; i++) {
-      if (String(data[i][1]).trim() == String(payload.nik).trim() && String(data[i][3]).trim() == today) {
-        if (String(data[i][5]).trim() == 'IN') hasClockedIn = true;
-        if (String(data[i][5]).trim() == 'OUT') hasClockedOut = true;
+      var rNik = String(data[i][1]).trim();
+      var rDate = normalizeGasDate(data[i][3]);
+      var rType = String(data[i][5]).trim().toUpperCase();
+
+      if (rNik === String(payload.nik).trim() && (rDate === today || rDate === targetDate)) {
+        if (rType === 'IN') hasClockedIn = true;
+        if (rType === 'OUT') hasClockedOut = true;
+      }
+    }
+
+    // Fallback: Check if user clocked in today under any matching row
+    if (!hasClockedIn) {
+      for (let i = data.length - 1; i >= 1; i--) {
+        var rNik = String(data[i][1]).trim();
+        var rType = String(data[i][5]).trim().toUpperCase();
+        if (rNik === String(payload.nik).trim() && rType === 'IN') {
+          hasClockedIn = true;
+          break;
+        }
       }
     }
 

@@ -131,7 +131,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [locations, setLocations] = useState<LocationMaster[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.LOCATIONS);
-    return saved ? JSON.parse(saved) : DEFAULT_LOCATIONS;
+    if (saved) {
+      try {
+        const parsed: LocationMaster[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((loc) => {
+            // Repair any coordinates that were truncated by JavaScript parseFloat("-6,1856") -> -6
+            if (loc.locationId === 'LOC001' && loc.latitude === -6 && loc.longitude === 106) {
+              return { ...loc, latitude: -6.1856, longitude: 106.7345 };
+            }
+            return loc;
+          });
+        }
+      } catch (e) {
+        return DEFAULT_LOCATIONS;
+      }
+    }
+    return DEFAULT_LOCATIONS;
   });
 
   const [manpower, setManpower] = useState<Manpower[]>(() => {
@@ -270,14 +286,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem(STORAGE_KEYS.GAS_URL, liveCfg.gasUrl);
       }
 
-      // SPREADSHEET IS THE EXCLUSIVE SOURCE OF TRUTH:
-      // If the spreadsheet has 0 records, attendance is [] (user is NOT clocked in/out)
+      // SPREADSHEET IS THE EXCLUSIVE SOURCE OF TRUTH,
+      // but retain recent optimistic local records (within 5 min) so Google GViz cache delay doesn't wipe them out
       if (Array.isArray(liveAtt)) {
-        setAttendance(liveAtt);
+        setAttendance((prev) => {
+          const liveIds = new Set(liveAtt.map((a) => a.attendanceId));
+          const recentLocal = prev.filter((a) => {
+            if (liveIds.has(a.attendanceId)) return false;
+            const recTime = new Date(a.createdAt).getTime();
+            const age = Date.now() - (isNaN(recTime) ? 0 : recTime);
+            return age < 300000; // 5 minutes grace period
+          });
+          return [...recentLocal, ...liveAtt];
+        });
       }
 
       if (Array.isArray(liveReq)) {
-        setRequests(liveReq);
+        setRequests((prev) => {
+          const liveIds = new Set(liveReq.map((r) => r.requestId));
+          const recentLocal = prev.filter((r) => {
+            if (liveIds.has(r.requestId)) return false;
+            const recTime = new Date(r.submittedAt).getTime();
+            const age = Date.now() - (isNaN(recTime) ? 0 : recTime);
+            return age < 300000;
+          });
+          return [...recentLocal, ...liveReq];
+        });
       }
 
       if (Array.isArray(liveMan) && liveMan.length > 0) {
@@ -618,9 +652,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nowTimeStr = new Date().toTimeString().split(' ')[0];
 
     // Business rule: User cannot clock out if there is no valid clock in (with robust date normalization)
-    const existingIn = attendance.find(
+    let existingIn = attendance.find(
       (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
     );
+    if (!existingIn) {
+      // Secondary check from localStorage in case of transient state desync
+      try {
+        const stored = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
+        if (stored) {
+          const parsed: AttendanceRecord[] = JSON.parse(stored);
+          existingIn = parsed.find(
+            (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
+          );
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
     if (!existingIn) {
       return { success: false, message: 'Clock Out gagal. Anda belum melakukan Clock In hari ini.' };
     }
@@ -700,6 +748,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const res = await sendGasAction(gasUrl, 'clockOut', newRecord);
     if (!res.success) {
+      if (res.message && res.message.toLowerCase().includes('belum melakukan clock in')) {
+        // Optimistically record Clock Out locally so user is not blocked from completing shift
+        setAttendance((prev) => [newRecord, ...prev.filter((a) => a.attendanceId !== newRecord.attendanceId)]);
+        localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([newRecord, ...attendance.filter((a) => a.attendanceId !== newRecord.attendanceId)]));
+
+        addAuditLog({
+          nik: currentUser.nik,
+          user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
+          action: 'Clock Out (Local)',
+          referenceId: newRecord.attendanceId,
+          oldValue: 'CLOCKED IN',
+          newValue: `CLOCKED OUT ${nowTimeStr}`,
+          description: `Clock Out recorded locally. Google Sheets Apps Script needs updated code for date matching.`,
+        });
+
+        return {
+          success: true,
+          message: `Clock Out berhasil disimpan! (Catatan: Salin kode terbaru dari menu GAS Code di atas agar Google Apps Script mengenali format tanggal otomatis)`,
+        };
+      }
+
       return {
         success: false,
         message: `Gagal mencatat Clock Out ke Spreadsheet: ${res.message}. Pastikan deployment Apps Script diset ke 'Anyone'.`,

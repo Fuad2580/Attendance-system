@@ -70,6 +70,32 @@ export function normalizeDateString(raw: string | null | undefined): string {
     return `${y}-${m}-${d}`;
   }
 
+  // Match Indonesian date format like "20 September 2026" or "20 Sep 2026"
+  const indoMonths: Record<string, string> = {
+    jan: '01', januari: '01',
+    feb: '02', februari: '02',
+    mar: '03', maret: '03',
+    apr: '04', april: '04',
+    mei: '05', may: '05',
+    jun: '06', juni: '06',
+    jul: '07', juli: '07',
+    agu: '08', agust: '08', agustus: '08', aug: '08',
+    sep: '09', sept: '09', september: '09',
+    okt: '10', oktober: '10', oct: '10',
+    nov: '11', november: '11',
+    des: '12', desember: '12', dec: '12',
+  };
+  const indoMatch = s.match(/^(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})/);
+  if (indoMatch) {
+    const d = indoMatch[1].padStart(2, '0');
+    const mKey = indoMatch[2].toLowerCase();
+    const m = indoMonths[mKey];
+    const y = indoMatch[3];
+    if (m) {
+      return `${y}-${m}-${d}`;
+    }
+  }
+
   // Fallback: try parsing with Date
   try {
     const parsed = new Date(s);

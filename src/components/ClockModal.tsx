@@ -119,17 +119,27 @@ export const ClockModal: React.FC<ClockModalProps> = ({
         return;
       }
 
-      const liveVector = extractFaceEmbeddingFromVideo(videoRef.current);
-      const threshold = config.faceMatchThreshold || 0.70;
-      const comp = verifyFaceAgainstTemplate(liveVector, registered.faceTemplate, threshold);
-      biometricScore = comp.score;
+      // Multi-frame verification: capture 2 distinct frames separated by 200ms
+      // Both frames must match the registered template independently to prevent false-positive bypass
+      const frame1 = extractFaceEmbeddingFromVideo(videoRef.current);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const frame2 = extractFaceEmbeddingFromVideo(videoRef.current);
 
-      if (!comp.matched) {
+      const threshold = config.faceMatchThreshold || 0.65;
+      const comp1 = verifyFaceAgainstTemplate(frame1, registered.faceTemplate, threshold);
+      const comp2 = verifyFaceAgainstTemplate(frame2, registered.faceTemplate, threshold);
+
+      const avgScore = Math.round(((comp1.score + comp2.score) / 2) * 100) / 100;
+      biometricScore = avgScore;
+
+      // Both frames must match the threshold
+      if (!comp1.matched || !comp2.matched) {
         setIsVerifying(false);
+        const lowestScore = Math.min(comp1.score, comp2.score);
         setVerificationResult({
           success: false,
-          score: comp.score,
-          message: comp.message,
+          score: avgScore,
+          message: `Wajah tidak cocok! Tingkat kesesuaian hanya ${Math.round(lowestScore * 100)}% (Dibutuhkan minimal ${Math.round(threshold * 100)}%). Sistem mendeteksi wajah tidak sesuai dengan data master biometrik.`,
         });
         return;
       }
