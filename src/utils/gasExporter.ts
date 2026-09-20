@@ -3,17 +3,18 @@
  * Provides the full modular .gs files and Google Sheets schema initialization script.
  */
 
-export const DEFAULT_SPREADSHEET_ID = '1d6cejgL6Fh49Umk4YrOM-Iop5v_j3l-R8DRoxUH5-oY';
-export const DEFAULT_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1d6cejgL6Fh49Umk4YrOM-Iop5v_j3l-R8DRoxUH5-oY/edit?gid=0#gid=0';
+import { DEFAULT_SPREADSHEET_ID, DEFAULT_SPREADSHEET_URL } from '../config/gasConfig';
+
+export { DEFAULT_SPREADSHEET_ID, DEFAULT_SPREADSHEET_URL };
 
 export const GAS_SCRIPTS = {
   'SetupSheets.gs': `/**
  * RETAIL ATTENDANCE MANAGEMENT - GOOGLE SHEETS INITIALIZER
  * Run this function once in your Apps Script Editor to set up all 8 required sheets with header columns.
- * Target Spreadsheet: https://docs.google.com/spreadsheets/d/1d6cejgL6Fh49Umk4YrOM-Iop5v_j3l-R8DRoxUH5-oY/edit
+ * Target Spreadsheet: https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit
  */
 
-const TARGET_SPREADSHEET_ID = '1d6cejgL6Fh49Umk4YrOM-Iop5v_j3l-R8DRoxUH5-oY';
+const TARGET_SPREADSHEET_ID = '${DEFAULT_SPREADSHEET_ID}';
 
 function getSpreadsheet() {
   try {
@@ -40,7 +41,8 @@ function initializeRetailAttendanceSheets() {
       ['Work Start Time', '08:00', 'Standard morning shift start time'],
       ['Work End Time', '17:00', 'Standard evening shift end time'],
       ['Archive Before Delete', 'TRUE', 'Move expired attendance to ATTENDANCE_ARCHIVE before purging'],
-      ['Request Retention Days', 365, 'Retention duration for requests and approval audit records']
+      ['Request Retention Days', 365, 'Retention duration for requests and approval audit records'],
+      ['GAS Web App URL', '', 'URL Web App Apps Script berakhiran /exec agar semua device otomatis tersambung']
     ],
     'MANPOWER': [
       ['NIK', 'Employee Name', 'Email', 'Phone', 'Position', 'Role Level', 'Department', 'Homebase Location ID', 'Flexible Location Attendance', 'Supervisor NIK', 'Status', 'Face Registered', 'Join Date', 'End Date'],
@@ -90,11 +92,11 @@ function initializeRetailAttendanceSheets() {
 
   'Code.gs': `/**
  * Google Apps Script Web App Entrypoint (doGet & doPost)
- * Handles JSON RPC routing for Retail Attendance Management
- * Target Spreadsheet: https://docs.google.com/spreadsheets/d/1d6cejgL6Fh49Umk4YrOM-Iop5v_j3l-R8DRoxUH5-oY/edit
+ * All-In-One API for Retail Attendance Management
+ * Target Spreadsheet: https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit
  */
 
-const TARGET_SPREADSHEET_ID = '1d6cejgL6Fh49Umk4YrOM-Iop5v_j3l-R8DRoxUH5-oY';
+const TARGET_SPREADSHEET_ID = '${DEFAULT_SPREADSHEET_ID}';
 
 function getSpreadsheet() {
   try {
@@ -118,30 +120,25 @@ function handleRequest(e) {
 
   try {
     let params = {};
-    if (e.postData && e.postData.contents) {
-      params = JSON.parse(e.postData.contents);
-    } else if (e.parameter) {
+    if (e && e.postData && e.postData.contents) {
+      try {
+        params = JSON.parse(e.postData.contents);
+      } catch (parseErr) {
+        params = e.parameter || {};
+      }
+    } else if (e && e.parameter) {
       params = e.parameter;
     }
 
-    const action = params.action;
+    const action = params.action || 'ping';
     let result = { success: false, message: 'Invalid or missing action', data: null };
 
     switch (action) {
       case 'ping':
-        result = { success: true, message: 'Retail Attendance API is active', timestamp: new Date().toISOString() };
+        result = { success: true, message: 'Retail Attendance API is active and connected to Google Sheets', timestamp: new Date().toISOString() };
         break;
-      case 'login':
-        result = Auth_login(params.nik);
-        break;
-      case 'getConfig':
-        result = Config_getAll();
-        break;
-      case 'getLocations':
-        result = Location_getAll();
-        break;
-      case 'getTodayAttendance':
-        result = Attendance_getToday(params.nik);
+      case 'getAllData':
+        result = Data_getAll();
         break;
       case 'clockIn':
         result = Attendance_clockIn(params);
@@ -149,23 +146,17 @@ function handleRequest(e) {
       case 'clockOut':
         result = Attendance_clockOut(params);
         break;
+      case 'registerFace':
+        result = Face_register(params);
+        break;
       case 'createRequest':
         result = Request_create(params);
-        break;
-      case 'getMyRequests':
-        result = Request_getByNik(params.nik);
-        break;
-      case 'getPendingApprovals':
-        result = Approval_getPendingForApprover(params.nik);
         break;
       case 'processApproval':
         result = Approval_process(params);
         break;
-      case 'registerFace':
-        result = Face_register(params);
-        break;
-      case 'getAdminSummary':
-        result = Admin_getSummary(params.nik);
+      case 'getConfig':
+        result = Config_getAll();
         break;
       default:
         result = { success: false, message: 'Unknown action: ' + action };
@@ -181,13 +172,292 @@ function handleRequest(e) {
     }));
     return output;
   }
-}`,
+}
 
-  'Config.gs': `/**
- * Config.gs - Reads dynamic configuration from CONFIG sheet
+/**
+ * Audit Log Helper (Writes to AUDIT_LOG sheet)
+ */
+function Audit_log(nik, user, action, refId, oldVal, newVal, lat, lon, desc) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('AUDIT_LOG');
+    if (!sheet) return;
+    const logId = 'AUD-' + Date.now() + '-' + Math.floor(100 + Math.random() * 900);
+    sheet.appendRow([
+      logId,
+      new Date().toISOString(),
+      nik || 'SYSTEM',
+      user || 'Unknown',
+      action,
+      refId || '-',
+      oldVal || '-',
+      newVal || '-',
+      lat || 0,
+      lon || 0,
+      desc || ''
+    ]);
+  } catch (err) {
+    Logger.log('Audit log error: ' + err);
+  }
+}
+
+/**
+ * Clock In with LockService
+ */
+function Attendance_clockIn(payload) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('ATTENDANCE');
+    if (!sheet) return { success: false, message: 'ATTENDANCE sheet not found' };
+
+    const today = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
+    const nowTime = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'HH:mm:ss');
+
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][1]).trim() == String(payload.nik).trim() && String(data[i][3]).trim() == today && String(data[i][5]).trim() == 'IN') {
+        return { success: false, message: 'Karyawan sudah melakukan Clock In hari ini.' };
+      }
+    }
+
+    const attendanceId = payload.attendanceId || ('ATT-' + today.replace(/-/g, '') + '-' + Math.floor(1000 + Math.random() * 9000));
+    const newRow = [
+      attendanceId,
+      payload.nik,
+      payload.employeeName,
+      payload.date || today,
+      payload.time || nowTime,
+      'IN',
+      payload.locationId || 'REMOTE',
+      payload.locationName || 'Unmapped Location',
+      payload.homebase || '-',
+      payload.latitude || 0,
+      payload.longitude || 0,
+      payload.accuracy || 0,
+      payload.distance || 0,
+      payload.attendanceMode || 'STANDARD',
+      payload.faceVerified ? 'TRUE' : 'FALSE',
+      payload.status || 'VERIFIED',
+      new Date().toISOString()
+    ];
+
+    sheet.appendRow(newRow);
+    Audit_log(payload.nik, payload.employeeName, 'Clock In', attendanceId, 'NOT CLOCKED IN', 'CLOCKED IN ' + (payload.time || nowTime), payload.latitude, payload.longitude, 'Clock In verified');
+
+    return { success: true, message: 'Clock In berhasil dicatat di Spreadsheet pada ' + (payload.time || nowTime), attendanceId: attendanceId };
+  } catch (err) {
+    return { success: false, message: 'Gagal mencatat Clock In: ' + err.toString() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Clock Out with LockService
+ */
+function Attendance_clockOut(payload) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('ATTENDANCE');
+    if (!sheet) return { success: false, message: 'ATTENDANCE sheet not found' };
+
+    const today = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
+    const nowTime = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'HH:mm:ss');
+
+    const data = sheet.getDataRange().getValues();
+    let hasClockedIn = false;
+    let hasClockedOut = false;
+
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][1]).trim() == String(payload.nik).trim() && String(data[i][3]).trim() == today) {
+        if (String(data[i][5]).trim() == 'IN') hasClockedIn = true;
+        if (String(data[i][5]).trim() == 'OUT') hasClockedOut = true;
+      }
+    }
+
+    if (!hasClockedIn) {
+      return { success: false, message: 'Clock Out gagal. Anda belum melakukan Clock In hari ini.' };
+    }
+    if (hasClockedOut) {
+      return { success: false, message: 'Anda sudah melakukan Clock Out hari ini.' };
+    }
+
+    const attendanceId = payload.attendanceId || ('ATT-' + today.replace(/-/g, '') + '-' + Math.floor(1000 + Math.random() * 9000));
+    const newRow = [
+      attendanceId,
+      payload.nik,
+      payload.employeeName,
+      payload.date || today,
+      payload.time || nowTime,
+      'OUT',
+      payload.locationId || 'REMOTE',
+      payload.locationName || 'Unmapped Location',
+      payload.homebase || '-',
+      payload.latitude || 0,
+      payload.longitude || 0,
+      payload.accuracy || 0,
+      payload.distance || 0,
+      payload.attendanceMode || 'STANDARD',
+      payload.faceVerified ? 'TRUE' : 'FALSE',
+      payload.status || 'VERIFIED',
+      new Date().toISOString()
+    ];
+
+    sheet.appendRow(newRow);
+    Audit_log(payload.nik, payload.employeeName, 'Clock Out', attendanceId, 'CLOCKED IN', 'CLOCKED OUT ' + (payload.time || nowTime), payload.latitude, payload.longitude, 'Clock Out verified');
+
+    return { success: true, message: 'Clock Out berhasil dicatat di Spreadsheet pada ' + (payload.time || nowTime), attendanceId: attendanceId };
+  } catch (err) {
+    return { success: false, message: 'Gagal mencatat Clock Out: ' + err.toString() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Register Face Template & update MANPOWER
+ */
+function Face_register(payload) {
+  try {
+    const ss = getSpreadsheet();
+    const faceSheet = ss.getSheetByName('FACE_REGISTER');
+    const manSheet = ss.getSheetByName('MANPOWER');
+    if (!faceSheet || !manSheet) return { success: false, message: 'Required sheets not found' };
+
+    const now = new Date().toISOString();
+    const faceData = faceSheet.getDataRange().getValues();
+    let foundFace = false;
+
+    for (let i = 1; i < faceData.length; i++) {
+      if (String(faceData[i][0]).trim() == String(payload.nik).trim()) {
+        faceSheet.getRange(i + 1, 3).setValue(payload.faceTemplate);
+        faceSheet.getRange(i + 1, 5).setValue(now);
+        foundFace = true;
+        break;
+      }
+    }
+
+    if (!foundFace) {
+      faceSheet.appendRow([
+        payload.nik,
+        payload.employeeName || '',
+        payload.faceTemplate,
+        now,
+        now,
+        'ACTIVE'
+      ]);
+    }
+
+    // Update MANPOWER sheet Face Registered column (col 12)
+    const manData = manSheet.getDataRange().getValues();
+    for (let i = 1; i < manData.length; i++) {
+      if (String(manData[i][0]).trim() == String(payload.nik).trim()) {
+        manSheet.getRange(i + 1, 12).setValue('TRUE');
+        break;
+      }
+    }
+
+    Audit_log(payload.nik, payload.employeeName, 'Face Registration', payload.nik, 'TEMPLATE', 'TEMPLATE_ACTIVE', 0, 0, 'Face template registered to Google Sheets');
+    return { success: true, message: 'Template biometrik wajah berhasil disimpan di Spreadsheet.' };
+  } catch (err) {
+    return { success: false, message: 'Gagal mendaftarkan wajah: ' + err.toString() };
+  }
+}
+
+/**
+ * Submit Request
+ */
+function Request_create(payload) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('REQUEST');
+    if (!sheet) return { success: false, message: 'REQUEST sheet not found' };
+
+    const todayStr = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
+    const reqId = payload.requestId || ('REQ-' + (payload.requestType || 'REQ').substring(0, 3).toUpperCase() + '-' + todayStr.replace(/-/g, '') + '-' + Math.floor(100 + Math.random() * 900));
+
+    sheet.appendRow([
+      reqId,
+      payload.nik,
+      payload.employeeName,
+      payload.requestType,
+      payload.startDate,
+      payload.endDate,
+      payload.startTime || '',
+      payload.endTime || '',
+      payload.reason || '',
+      payload.attachment || '',
+      'PENDING APPROVAL',
+      payload.currentApproverNik || '',
+      new Date().toISOString(),
+      '',
+      '',
+      ''
+    ]);
+
+    Audit_log(payload.nik, payload.employeeName, 'Request Created', reqId, 'DRAFT', 'PENDING APPROVAL', 0, 0, 'Request submitted');
+    return { success: true, message: 'Pengajuan berhasil dicatat di Spreadsheet.', requestId: reqId };
+  } catch (err) {
+    return { success: false, message: 'Gagal membuat pengajuan: ' + err.toString() };
+  }
+}
+
+/**
+ * Process Approval / Rejection
+ */
+function Approval_process(payload) {
+  try {
+    const ss = getSpreadsheet();
+    const appSheet = ss.getSheetByName('APPROVAL');
+    const reqSheet = ss.getSheetByName('REQUEST');
+    if (!appSheet || !reqSheet) return { success: false, message: 'Sheet not found' };
+
+    const now = new Date().toISOString();
+    const appData = appSheet.getDataRange().getValues();
+    const appRow = [
+      payload.approvalId || ('APP-' + Date.now() + '-' + Math.floor(100 + Math.random() * 900)),
+      payload.requestId,
+      payload.approverNik,
+      payload.approverName,
+      payload.role || 'SUPERVISOR',
+      payload.action,
+      now,
+      payload.comment || ''
+    ];
+    appSheet.appendRow(appRow);
+
+    // Update status in REQUEST sheet
+    const reqData = reqSheet.getDataRange().getValues();
+    for (let i = 1; i < reqData.length; i++) {
+      if (String(reqData[i][0]).trim() == String(payload.requestId).trim()) {
+        const newStatus = payload.action == 'APPROVE' ? 'APPROVED' : 'REJECTED';
+        reqSheet.getRange(i + 1, 11).setValue(newStatus);
+        if (payload.action == 'APPROVE') {
+          reqSheet.getRange(i + 1, 14).setValue(now);
+        } else {
+          reqSheet.getRange(i + 1, 15).setValue(now);
+          reqSheet.getRange(i + 1, 16).setValue(payload.comment || 'Rejected');
+        }
+        break;
+      }
+    }
+
+    Audit_log(payload.approverNik, payload.approverName, 'Request ' + payload.action, payload.requestId, 'PENDING', payload.action, 0, 0, payload.comment);
+    return { success: true, message: 'Status approval berhasil diperbarui di Spreadsheet.' };
+  } catch (err) {
+    return { success: false, message: 'Gagal memproses approval: ' + err.toString() };
+  }
+}
+
+/**
+ * Config_getAll
  */
 function Config_getAll() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSpreadsheet();
   const sheet = ss.getSheetByName('CONFIG');
   if (!sheet) return { success: false, message: 'CONFIG sheet not found' };
 
@@ -201,114 +471,23 @@ function Config_getAll() {
     config[key] = val;
   }
   return { success: true, data: config };
-}`,
-
-  'Attendance.gs': `/**
- * Attendance.gs - Clock In and Clock Out with LockService & GPS validation
- */
-function Attendance_clockIn(payload) {
-  const lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(10000);
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName('ATTENDANCE');
-    const today = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
-    const nowTime = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'HH:mm:ss');
-
-    // Check if already clocked in today
-    const data = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][1] == payload.nik && data[i][3] == today && data[i][5] == 'IN') {
-        return { success: false, message: 'You have already clocked in today.' };
-      }
-    }
-
-    const attendanceId = 'ATT-' + today.replace(/-/g, '') + '-' + Math.floor(1000 + Math.random() * 9000);
-    const newRow = [
-      attendanceId,
-      payload.nik,
-      payload.employeeName,
-      today,
-      nowTime,
-      'IN',
-      payload.locationId,
-      payload.locationName,
-      payload.homebase,
-      payload.latitude,
-      payload.longitude,
-      payload.accuracy,
-      payload.distance,
-      payload.attendanceMode,
-      payload.faceVerified,
-      'VERIFIED',
-      new Date().toISOString()
-    ];
-
-    sheet.appendRow(newRow);
-    Audit_log(payload.nik, payload.employeeName, 'Clock In', attendanceId, 'NOT CLOCKED IN', 'CLOCKED IN ' + nowTime, payload.latitude, payload.longitude, 'Clock In verified');
-
-    return { success: true, message: 'Clock In successful at ' + nowTime, attendanceId: attendanceId };
-  } catch (err) {
-    return { success: false, message: 'Failed to record clock in: ' + err.toString() };
-  } finally {
-    lock.releaseLock();
-  }
 }
 
-function Attendance_clockOut(payload) {
-  const lock = LockService.getScriptLock();
+/**
+ * Data_getAll - Returns all live tables in one call
+ */
+function Data_getAll() {
   try {
-    lock.waitLock(10000);
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName('ATTENDANCE');
-    const today = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
-    const nowTime = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'HH:mm:ss');
-
-    const data = sheet.getDataRange().getValues();
-    let hasClockedIn = false;
-    let hasClockedOut = false;
-
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][1] == payload.nik && data[i][3] == today) {
-        if (data[i][5] == 'IN') hasClockedIn = true;
-        if (data[i][5] == 'OUT') hasClockedOut = true;
+    const ss = getSpreadsheet();
+    return {
+      success: true,
+      data: {
+        config: Config_getAll().data || {},
+        timestamp: new Date().toISOString()
       }
-    }
-
-    if (!hasClockedIn) {
-      return { success: false, message: 'Cannot clock out. No valid Clock In record found for today.' };
-    }
-    if (hasClockedOut) {
-      return { success: false, message: 'You have already clocked out today.' };
-    }
-
-    const attendanceId = 'ATT-' + today.replace(/-/g, '') + '-' + Math.floor(1000 + Math.random() * 9000);
-    const newRow = [
-      attendanceId,
-      payload.nik,
-      payload.employeeName,
-      today,
-      nowTime,
-      'OUT',
-      payload.locationId,
-      payload.locationName,
-      payload.homebase,
-      payload.latitude,
-      payload.longitude,
-      payload.accuracy,
-      payload.distance,
-      payload.attendanceMode,
-      payload.faceVerified,
-      'VERIFIED',
-      new Date().toISOString()
-    ];
-
-    sheet.appendRow(newRow);
-    Audit_log(payload.nik, payload.employeeName, 'Clock Out', attendanceId, 'CLOCKED IN', 'CLOCKED OUT ' + nowTime, payload.latitude, payload.longitude, 'Clock Out verified');
-
-    return { success: true, message: 'Clock Out recorded at ' + nowTime, attendanceId: attendanceId };
-  } finally {
-    lock.releaseLock();
+    };
+  } catch (err) {
+    return { success: false, message: err.toString() };
   }
 }`
 };

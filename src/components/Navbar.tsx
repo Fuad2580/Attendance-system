@@ -11,6 +11,7 @@ import {
   Navigation,
   Sparkles,
   ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 import { RoleLevel } from '../types';
 
@@ -33,7 +34,19 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const currentTab = activeTab || propCurrentTab || 'dashboard';
   const setCurrentTab = onTabChange || propSetCurrentTab || (() => {});
-  const { currentUser, logout, switchUser, manpower, requests, approvals, spreadsheetUrl } = useApp();
+  const {
+    currentUser,
+    logout,
+    switchUser,
+    manpower,
+    requests,
+    approvals,
+    spreadsheetUrl,
+    gasUrl,
+    isLiveSyncing,
+    lastSyncTime,
+    syncFromSpreadsheet,
+  } = useApp();
   const [showUserDropdown, setShowUserDropdown] = useState(false);
 
   if (!currentUser) return null;
@@ -86,15 +99,41 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Live Sync Polling Indicator */}
+          <button
+            onClick={() => syncFromSpreadsheet()}
+            disabled={isLiveSyncing}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors border shadow-2xs ${
+              isLiveSyncing
+                ? 'bg-blue-50 text-blue-800 border-blue-200'
+                : 'bg-emerald-50 text-emerald-800 border-emerald-300/80 hover:bg-emerald-100'
+            }`}
+            title={
+              lastSyncTime
+                ? `Sinkron otomatis dari Google Sheets (${lastSyncTime.toLocaleTimeString('id-ID')}). Klik untuk refresh seketika.`
+                : 'Sinkron otomatis dengan Google Sheets'
+            }
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${
+                isLiveSyncing ? 'animate-spin text-blue-600' : 'text-emerald-600'
+              }`}
+            />
+            <span className="hidden sm:inline">
+              {isLiveSyncing ? 'Syncing...' : 'Live Sync'}
+            </span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse hidden md:inline-block"></span>
+          </button>
+
           {/* External Google Spreadsheet Link */}
           <a
             href={spreadsheetUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors border border-emerald-300/80 shadow-2xs"
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors border border-slate-200/80 shadow-2xs"
             title="Buka Google Spreadsheet di tab baru"
           >
-            <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
+            <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
             <span className="hidden sm:inline">Buka</span>
             <span>Sheet</span>
           </a>

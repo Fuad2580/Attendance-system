@@ -35,7 +35,7 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({ onClose }) => {
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     setGasUrl(inputUrl);
-    const res = await syncGas();
+    const res = await syncGas(inputUrl);
     setSyncStatus(res);
   };
 

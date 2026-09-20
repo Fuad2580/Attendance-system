@@ -23,6 +23,15 @@ import {
 } from '../data/defaultData';
 import { findNearestLocation } from '../utils/geo';
 import { DEFAULT_SPREADSHEET_URL, DEFAULT_SPREADSHEET_ID } from '../utils/gasExporter';
+import { DEFAULT_GAS_URL } from '../config/gasConfig';
+import {
+  fetchLiveAttendance,
+  fetchLiveManpower,
+  fetchLiveLocations,
+  fetchLiveRequests,
+  fetchLiveConfig,
+  sendGasAction,
+} from '../services/sheetSyncService';
 
 interface AppContextType {
   // Master Data
@@ -87,7 +96,10 @@ interface AppContextType {
   gasUrl: string;
   setGasUrl: (url: string) => void;
   isSyncingGas: boolean;
-  syncGas: () => Promise<{ success: boolean; message: string }>;
+  syncGas: (urlOverride?: string) => Promise<{ success: boolean; message: string }>;
+  lastSyncTime: Date | null;
+  isLiveSyncing: boolean;
+  syncFromSpreadsheet: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -149,7 +161,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [gasUrl, setGasUrlState] = useState<string>(() => {
-    return localStorage.getItem(STORAGE_KEYS.GAS_URL) || '';
+    return localStorage.getItem(STORAGE_KEYS.GAS_URL) || DEFAULT_GAS_URL || '';
   });
 
   const [spreadsheetUrl, setSpreadsheetUrlState] = useState<string>(() => {
@@ -232,6 +244,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setGasUrlState(url);
     localStorage.setItem(STORAGE_KEYS.GAS_URL, url);
   };
+
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [isLiveSyncing, setIsLiveSyncing] = useState(false);
+
+  // Synchronize latest live records from Google Sheets
+  const syncFromSpreadsheet = useCallback(async () => {
+    if (!spreadsheetId) return;
+    try {
+      setIsLiveSyncing(true);
+      const [liveAtt, liveReq, liveMan, liveLoc, liveCfg] = await Promise.all([
+        fetchLiveAttendance(spreadsheetId),
+        fetchLiveRequests(spreadsheetId),
+        fetchLiveManpower(spreadsheetId),
+        fetchLiveLocations(spreadsheetId),
+        fetchLiveConfig(spreadsheetId),
+      ]);
+
+      if (liveCfg?.gasUrl && !gasUrl) {
+        setGasUrl(liveCfg.gasUrl);
+      }
+
+      if (liveAtt && liveAtt.length > 0) {
+        setAttendance((prev) => {
+          const remoteMap = new Map(liveAtt.map((a) => [a.attendanceId, a]));
+          // Keep recently created local attendance not yet visible in remote (within 60s)
+          const now = Date.now();
+          const pending = prev.filter((p) => {
+            if (remoteMap.has(p.attendanceId)) return false;
+            const itemTime = new Date(p.createdAt || 0).getTime();
+            return now - itemTime < 60000;
+          });
+          return [...pending, ...liveAtt];
+        });
+      }
+
+      if (liveReq && liveReq.length > 0) {
+        setRequests(liveReq);
+      }
+
+      if (liveMan && liveMan.length > 0) {
+        setManpower(liveMan);
+      }
+
+      if (liveLoc && liveLoc.length > 0) {
+        setLocations(liveLoc);
+      }
+
+      setLastSyncTime(new Date());
+    } catch (err) {
+      console.warn('[SheetSync] live sync warning:', err);
+    } finally {
+      setIsLiveSyncing(false);
+    }
+  }, [spreadsheetId]);
+
+  // Automated background polling every 10s and on tab focus
+  useEffect(() => {
+    syncFromSpreadsheet();
+
+    const interval = setInterval(() => {
+      syncFromSpreadsheet();
+    }, 10000);
+
+    const onFocus = () => {
+      syncFromSpreadsheet();
+    };
+
+    window.addEventListener('focus', onFocus);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        syncFromSpreadsheet();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [syncFromSpreadsheet]);
 
   const currentUser = useMemo(() => {
     if (!currentUserNik) return null;
@@ -428,6 +521,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setAttendance((prev) => [newRecord, ...prev]);
 
+    // Push to Google Apps Script in background
+    if (gasUrl) {
+      sendGasAction(gasUrl, 'clockIn', newRecord).then((res) => {
+        if (res.success) {
+          setTimeout(() => syncFromSpreadsheet(), 1200);
+        } else {
+          console.warn('[GAS] Clock in recording warning:', res.message);
+        }
+      });
+    }
+
     addAuditLog({
       nik: currentUser.nik,
       user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
@@ -510,6 +614,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setAttendance((prev) => [newRecord, ...prev]);
 
+    // Push to Google Apps Script in background
+    if (gasUrl) {
+      sendGasAction(gasUrl, 'clockOut', newRecord).then((res) => {
+        if (res.success) {
+          setTimeout(() => syncFromSpreadsheet(), 1200);
+        } else {
+          console.warn('[GAS] Clock out recording warning:', res.message);
+        }
+      });
+    }
+
     addAuditLog({
       nik: currentUser.nik,
       user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
@@ -561,6 +676,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       newValue: 'TEMPLATE_ACTIVE',
       description: 'Biometric face embedding vector registered successfully',
     });
+
+    if (gasUrl) {
+      sendGasAction(gasUrl, 'registerFace', {
+        nik,
+        employeeName: emp.employeeName,
+        faceTemplate: templateJson,
+      }).then((res) => {
+        if (res.success) {
+          setTimeout(() => syncFromSpreadsheet(), 1200);
+        }
+      });
+    }
 
     return { success: true, message: 'Face biometric template registered successfully.' };
   };
@@ -614,6 +741,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setRequests((prev) => [newReq, ...prev]);
 
+    if (gasUrl) {
+      sendGasAction(gasUrl, 'createRequest', newReq).then((res) => {
+        if (res.success) {
+          setTimeout(() => syncFromSpreadsheet(), 1200);
+        }
+      });
+    }
+
     addAuditLog({
       nik: currentUser.nik,
       user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
@@ -656,6 +791,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       comment,
     };
     setApprovals((prev) => [newApproval, ...prev]);
+
+    if (gasUrl) {
+      sendGasAction(gasUrl, 'processApproval', newApproval).then((res) => {
+        if (res.success) {
+          setTimeout(() => syncFromSpreadsheet(), 1200);
+        }
+      });
+    }
 
     // 3. If Clock In/Out Revision: update target attendance record (Rule 25)
     if (req.requestType === 'Clock In Revision' || req.requestType === 'Clock Out Revision') {
@@ -732,6 +875,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setApprovals((prev) => [newApproval, ...prev]);
 
+    if (gasUrl) {
+      sendGasAction(gasUrl, 'processApproval', newApproval).then((res) => {
+        if (res.success) {
+          setTimeout(() => syncFromSpreadsheet(), 1200);
+        }
+      });
+    }
+
     addAuditLog({
       nik: currentUser.nik,
       user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
@@ -802,20 +953,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUserNik('1001');
   };
 
-  const syncGas = async () => {
-    if (!gasUrl) {
+  const syncGas = async (urlOverride?: string) => {
+    const targetUrl = urlOverride || gasUrl;
+    if (!targetUrl) {
       return { success: false, message: 'Please provide a valid Google Apps Script Web App URL.' };
     }
 
     setIsSyncingGas(true);
     try {
-      const res = await fetch(gasUrl, {
+      const res = await fetch(targetUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'ping' }),
       });
       const data = await res.json();
       setIsSyncingGas(false);
+      // Trigger live sync immediately
+      syncFromSpreadsheet();
       return {
         success: data.success,
         message: data.message || 'Connected to Google Apps Script successfully!',
@@ -870,6 +1024,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setGasUrl,
         isSyncingGas,
         syncGas,
+        lastSyncTime,
+        isLiveSyncing,
+        syncFromSpreadsheet,
       }}
     >
       {children}
