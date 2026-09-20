@@ -13,6 +13,7 @@ import {
   FileSpreadsheet,
 } from 'lucide-react';
 import { GAS_SCRIPTS } from '../utils/gasExporter';
+import { sendGasAction } from '../services/sheetSyncService';
 
 interface GasSetupModalProps {
   onClose: () => void;
@@ -37,6 +38,14 @@ export const GasSetupModal: React.FC<GasSetupModalProps> = ({ onClose }) => {
     setGasUrl(inputUrl);
     const res = await syncGas(inputUrl);
     setSyncStatus(res);
+    if (res.success && inputUrl) {
+      // Auto-save this URL to the CONFIG sheet in Google Sheets so all devices connect automatically!
+      sendGasAction(inputUrl, 'saveConfig', {
+        key: 'GAS Web App URL',
+        value: inputUrl,
+        desc: 'URL Web App Apps Script berakhiran /exec agar semua device otomatis tersambung',
+      });
+    }
   };
 
   return (

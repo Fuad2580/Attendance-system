@@ -54,6 +54,7 @@ const MainLayout: React.FC = () => {
             onOpenNewRequest={handleOpenNewRequest}
             onViewAllRequests={() => setActiveTab('requests')}
             onOpenSpreadsheet={() => setShowSpreadsheetModal(true)}
+            onOpenGasSetup={() => setShowGasModal(true)}
           />
         )}
 

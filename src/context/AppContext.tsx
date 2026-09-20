@@ -30,6 +30,7 @@ import {
   fetchLiveLocations,
   fetchLiveRequests,
   fetchLiveConfig,
+  fetchLiveFaceRegisters,
   sendGasAction,
 } from '../services/sheetSyncService';
 
@@ -64,9 +65,9 @@ interface AppContextType {
   currentSimulatedLabel: string | null;
 
   // Actions
-  clockIn: (options?: { faceVerified?: boolean }) => { success: boolean; message: string };
-  clockOut: (options?: { faceVerified?: boolean }) => { success: boolean; message: string };
-  registerFaceTemplate: (nik: string, templateJson: string) => { success: boolean; message: string };
+  clockIn: (options?: { faceVerified?: boolean }) => Promise<{ success: boolean; message: string }>;
+  clockOut: (options?: { faceVerified?: boolean }) => Promise<{ success: boolean; message: string }>;
+  registerFaceTemplate: (nik: string, templateJson: string) => Promise<{ success: boolean; message: string }>;
 
   // Requests & Approvals
   submitRequest: (requestData: {
@@ -135,10 +136,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : DEFAULT_MANPOWER;
   });
 
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-    return saved ? JSON.parse(saved) : DEFAULT_ATTENDANCE;
-  });
+  // Attendance is strictly driven by Google Sheets (no mock, no local persistence of unverified state)
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+
+  // Automatically purge any stale local attendance cache on startup
+  useEffect(() => {
+    localStorage.removeItem(STORAGE_KEYS.ATTENDANCE);
+  }, []);
 
   const [requests, setRequests] = useState<RequestRecord[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.REQUESTS);
@@ -213,10 +217,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [manpower]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendance));
-  }, [attendance]);
-
-  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(requests));
   }, [requests]);
 
@@ -253,42 +253,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!spreadsheetId) return;
     try {
       setIsLiveSyncing(true);
-      const [liveAtt, liveReq, liveMan, liveLoc, liveCfg] = await Promise.all([
+      const [liveAtt, liveReq, liveMan, liveLoc, liveCfg, liveFaces] = await Promise.all([
         fetchLiveAttendance(spreadsheetId),
         fetchLiveRequests(spreadsheetId),
         fetchLiveManpower(spreadsheetId),
         fetchLiveLocations(spreadsheetId),
         fetchLiveConfig(spreadsheetId),
+        fetchLiveFaceRegisters(spreadsheetId),
       ]);
 
-      if (liveCfg?.gasUrl && !gasUrl) {
+      if (liveCfg?.gasUrl) {
         setGasUrl(liveCfg.gasUrl);
+        localStorage.setItem(STORAGE_KEYS.GAS_URL, liveCfg.gasUrl);
       }
 
-      if (liveAtt && liveAtt.length > 0) {
-        setAttendance((prev) => {
-          const remoteMap = new Map(liveAtt.map((a) => [a.attendanceId, a]));
-          // Keep recently created local attendance not yet visible in remote (within 60s)
-          const now = Date.now();
-          const pending = prev.filter((p) => {
-            if (remoteMap.has(p.attendanceId)) return false;
-            const itemTime = new Date(p.createdAt || 0).getTime();
-            return now - itemTime < 60000;
-          });
-          return [...pending, ...liveAtt];
-        });
+      // SPREADSHEET IS THE EXCLUSIVE SOURCE OF TRUTH:
+      // If the spreadsheet has 0 records, attendance is [] (user is NOT clocked in/out)
+      if (Array.isArray(liveAtt)) {
+        setAttendance(liveAtt);
       }
 
-      if (liveReq && liveReq.length > 0) {
+      if (Array.isArray(liveReq)) {
         setRequests(liveReq);
       }
 
-      if (liveMan && liveMan.length > 0) {
+      if (Array.isArray(liveMan) && liveMan.length > 0) {
         setManpower(liveMan);
       }
 
-      if (liveLoc && liveLoc.length > 0) {
+      if (Array.isArray(liveLoc) && liveLoc.length > 0) {
         setLocations(liveLoc);
+      }
+
+      if (Array.isArray(liveFaces)) {
+        setFaceRegisters(liveFaces);
       }
 
       setLastSyncTime(new Date());
@@ -444,7 +442,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Attendance Actions
-  const clockIn = (options?: { faceVerified?: boolean }) => {
+  const clockIn = async (options?: { faceVerified?: boolean }) => {
     if (!currentUser) return { success: false, message: 'User is not logged in.' };
     if (!config.allowClockIn) return { success: false, message: 'Clock In is currently disabled by administrator.' };
 
@@ -519,18 +517,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
 
-    setAttendance((prev) => [newRecord, ...prev]);
-
-    // Push to Google Apps Script in background
-    if (gasUrl) {
-      sendGasAction(gasUrl, 'clockIn', newRecord).then((res) => {
-        if (res.success) {
-          setTimeout(() => syncFromSpreadsheet(), 1200);
-        } else {
-          console.warn('[GAS] Clock in recording warning:', res.message);
-        }
-      });
+    if (!gasUrl) {
+      return {
+        success: false,
+        message: '⚠️ Perangkat ini belum terhubung ke Google Apps Script. Buka menu GAS Code di atas untuk menghubungkan Web App URL agar Clock In langsung tercatat di Google Sheets.',
+      };
     }
+
+    const res = await sendGasAction(gasUrl, 'clockIn', newRecord);
+    if (!res.success) {
+      return {
+        success: false,
+        message: `Gagal mencatat Clock In ke Spreadsheet: ${res.message}. Pastikan deployment Apps Script diset ke 'Anyone'.`,
+      };
+    }
+
+    // Refresh directly from Google Sheets
+    await syncFromSpreadsheet();
 
     addAuditLog({
       nik: currentUser.nik,
@@ -542,10 +545,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       description: `Clock In verified at ${newRecord.locationName} (${geoStatus.distance}m from center). Homebase: ${homebaseName}.`,
     });
 
-    return { success: true, message: `Clock In successful at ${nowTimeStr} (${newRecord.locationName})!` };
+    return { success: true, message: `Clock In berhasil dicatat di Spreadsheet pada ${nowTimeStr}!` };
   };
 
-  const clockOut = (options?: { faceVerified?: boolean }) => {
+  const clockOut = async (options?: { faceVerified?: boolean }) => {
     if (!currentUser) return { success: false, message: 'User is not logged in.' };
     if (!config.allowClockOut) return { success: false, message: 'Clock Out is currently disabled by administrator.' };
 
@@ -612,18 +615,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
 
-    setAttendance((prev) => [newRecord, ...prev]);
-
-    // Push to Google Apps Script in background
-    if (gasUrl) {
-      sendGasAction(gasUrl, 'clockOut', newRecord).then((res) => {
-        if (res.success) {
-          setTimeout(() => syncFromSpreadsheet(), 1200);
-        } else {
-          console.warn('[GAS] Clock out recording warning:', res.message);
-        }
-      });
+    if (!gasUrl) {
+      return {
+        success: false,
+        message: '⚠️ Perangkat ini belum terhubung ke Google Apps Script. Buka menu GAS Code di atas untuk menghubungkan Web App URL agar Clock Out langsung tercatat di Google Sheets.',
+      };
     }
+
+    const res = await sendGasAction(gasUrl, 'clockOut', newRecord);
+    if (!res.success) {
+      return {
+        success: false,
+        message: `Gagal mencatat Clock Out ke Spreadsheet: ${res.message}. Pastikan deployment Apps Script diset ke 'Anyone'.`,
+      };
+    }
+
+    // Refresh directly from Google Sheets
+    await syncFromSpreadsheet();
 
     addAuditLog({
       nik: currentUser.nik,
@@ -635,12 +643,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       description: `Clock Out recorded at ${nowTimeStr} (${newRecord.locationName}).`,
     });
 
-    return { success: true, message: `Clock Out recorded at ${nowTimeStr}. Have a great rest!` };
+    return { success: true, message: `Clock Out berhasil dicatat di Spreadsheet pada ${nowTimeStr}!` };
   };
 
-  const registerFaceTemplate = (nik: string, templateJson: string) => {
+  const registerFaceTemplate = async (nik: string, templateJson: string) => {
     const emp = manpower.find((m) => m.nik === nik);
     if (!emp) return { success: false, message: 'Employee not found.' };
+
+    if (!gasUrl) {
+      return {
+        success: false,
+        message: 'URL Web App Apps Script belum terhubung di perangkat ini. Silakan hubungkan URL di menu GAS Code di atas agar data wajah tersimpan ke Spreadsheet.',
+      };
+    }
+
+    const gasRes = await sendGasAction(gasUrl, 'registerFace', {
+      nik,
+      employeeName: emp.employeeName,
+      faceTemplate: templateJson,
+    });
+
+    if (!gasRes.success) {
+      return {
+        success: false,
+        message: `Gagal menyimpan template wajah ke Spreadsheet: ${gasRes.message}. Pastikan URL Web App benar dan akses diset ke 'Anyone'.`,
+      };
+    }
 
     const now = new Date().toISOString();
     const existingIndex = faceRegisters.findIndex((f) => f.nik === nik);
@@ -674,22 +702,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       referenceId: nik,
       oldValue: emp.faceRegistered ? 'TEMPLATE_REGISTERED' : 'UNREGISTERED',
       newValue: 'TEMPLATE_ACTIVE',
-      description: 'Biometric face embedding vector registered successfully',
+      description: 'Biometric face embedding vector registered successfully to Google Sheets',
     });
 
-    if (gasUrl) {
-      sendGasAction(gasUrl, 'registerFace', {
-        nik,
-        employeeName: emp.employeeName,
-        faceTemplate: templateJson,
-      }).then((res) => {
-        if (res.success) {
-          setTimeout(() => syncFromSpreadsheet(), 1200);
-        }
-      });
-    }
-
-    return { success: true, message: 'Face biometric template registered successfully.' };
+    setTimeout(() => syncFromSpreadsheet(), 1200);
+    return { success: true, message: 'Data biometrik wajah berhasil dicatat ke Google Spreadsheet!' };
   };
 
   // Request & Approval

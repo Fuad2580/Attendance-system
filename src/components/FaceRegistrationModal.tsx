@@ -85,7 +85,7 @@ export const FaceRegistrationModal: React.FC<FaceRegistrationModalProps> = ({ on
     }
 
     const vectorJson = JSON.stringify(finalVector);
-    const res = registerFaceTemplate(currentUser.nik, vectorJson);
+    const res = await registerFaceTemplate(currentUser.nik, vectorJson);
 
     setIsProcessing(false);
     if (res.success) {

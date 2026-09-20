@@ -175,46 +175,8 @@ export const DEFAULT_MANPOWER: Manpower[] = [
   },
 ];
 
-export const DEFAULT_ATTENDANCE: AttendanceRecord[] = [
-  {
-    attendanceId: 'ATT-20260919-001',
-    nik: '1001',
-    employeeName: 'Andi Pratama',
-    date: '2026-09-19',
-    time: '07:54:12',
-    type: 'IN',
-    locationId: 'LOC001',
-    locationName: 'Ruko Puri Indah',
-    homebase: 'Ruko Puri Indah',
-    latitude: -6.18562,
-    longitude: 106.73448,
-    accuracy: 9,
-    distance: 14,
-    attendanceMode: 'STANDARD',
-    faceVerified: true,
-    status: 'VERIFIED',
-    createdAt: '2026-09-19T07:54:12+07:00',
-  },
-  {
-    attendanceId: 'ATT-20260919-002',
-    nik: '1001',
-    employeeName: 'Andi Pratama',
-    date: '2026-09-19',
-    time: '17:08:44',
-    type: 'OUT',
-    locationId: 'LOC001',
-    locationName: 'Ruko Puri Indah',
-    homebase: 'Ruko Puri Indah',
-    latitude: -6.18559,
-    longitude: 106.73452,
-    accuracy: 11,
-    distance: 18,
-    attendanceMode: 'STANDARD',
-    faceVerified: true,
-    status: 'VERIFIED',
-    createdAt: '2026-09-19T17:08:44+07:00',
-  },
-];
+// No mock/dummy attendance by default - attendance is strictly loaded from Google Sheets
+export const DEFAULT_ATTENDANCE: AttendanceRecord[] = [];
 
 export const DEFAULT_REQUESTS: RequestRecord[] = [
   {

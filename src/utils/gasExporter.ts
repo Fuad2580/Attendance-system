@@ -158,6 +158,9 @@ function handleRequest(e) {
       case 'getConfig':
         result = Config_getAll();
         break;
+      case 'saveConfig':
+        result = Config_set(params);
+        break;
       default:
         result = { success: false, message: 'Unknown action: ' + action };
     }
@@ -471,6 +474,33 @@ function Config_getAll() {
     config[key] = val;
   }
   return { success: true, data: config };
+}
+
+/**
+ * Config_set - Saves or updates configuration parameters into CONFIG sheet
+ */
+function Config_set(payload) {
+  try {
+    const ss = getSpreadsheet();
+    let sheet = ss.getSheetByName('CONFIG');
+    if (!sheet) return { success: false, message: 'CONFIG sheet not found' };
+    const data = sheet.getDataRange().getValues();
+    let found = false;
+    const keyToFind = String(payload.key || '').trim().toLowerCase();
+    for (let i = 0; i < data.length; i++) {
+      if (String(data[i][0]).trim().toLowerCase() === keyToFind) {
+        sheet.getRange(i + 1, 2).setValue(payload.value);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      sheet.appendRow([payload.key, payload.value, payload.desc || 'Auto-configured parameter']);
+    }
+    return { success: true, message: 'Configuration saved to Google Sheets successfully.' };
+  } catch (err) {
+    return { success: false, message: 'Failed to save config: ' + err.toString() };
+  }
 }
 
 /**

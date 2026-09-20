@@ -127,7 +127,7 @@ export const ClockModal: React.FC<ClockModalProps> = ({
     }
 
     // Execute Attendance Action
-    const res = type === 'IN' ? clockIn({ faceVerified }) : clockOut({ faceVerified });
+    const res = type === 'IN' ? await clockIn({ faceVerified }) : await clockOut({ faceVerified });
 
     setIsVerifying(false);
     setVerificationResult({

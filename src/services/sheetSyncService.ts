@@ -223,6 +223,36 @@ export async function fetchLiveRequests(spreadsheetId: string): Promise<RequestR
 }
 
 /**
+ * Fetch all registered face templates from FACE_REGISTER sheet
+ */
+export async function fetchLiveFaceRegisters(spreadsheetId: string): Promise<FaceRegisterRecord[]> {
+  try {
+    const rawRows = await fetchGvizSheet(spreadsheetId, 'FACE_REGISTER');
+    if (!rawRows || rawRows.length === 0) return [];
+
+    const list: FaceRegisterRecord[] = [];
+    for (let i = 0; i < rawRows.length; i++) {
+      const row = rawRows[i];
+      const nik = String(row[0] || '').trim();
+      if (!nik || nik.toLowerCase() === 'nik') continue;
+
+      list.push({
+        nik,
+        employeeName: String(row[1] || '').trim(),
+        faceTemplate: String(row[2] || '').trim(),
+        registeredAt: String(row[3] || new Date().toISOString()),
+        updatedAt: String(row[4] || new Date().toISOString()),
+        status: (String(row[5] || '').toUpperCase() as any) || 'ACTIVE',
+      });
+    }
+    return list;
+  } catch (err) {
+    console.warn('[SheetSync] fetchLiveFaceRegisters failed:', err);
+    return [];
+  }
+}
+
+/**
  * Send write action to Google Apps Script Web App
  */
 export async function sendGasAction(gasUrl: string, action: string, payload: any = {}): Promise<{ success: boolean; message: string; data?: any }> {

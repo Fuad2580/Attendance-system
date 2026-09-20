@@ -23,12 +23,14 @@ interface DashboardViewProps {
   onOpenNewRequest: (preselectedType?: RequestType) => void;
   onViewAllRequests: () => void;
   onOpenSpreadsheet: () => void;
+  onOpenGasSetup?: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenNewRequest,
   onViewAllRequests,
   onOpenSpreadsheet,
+  onOpenGasSetup,
 }) => {
   const {
     currentUser,
@@ -42,6 +44,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     attendance,
     requests,
     locations,
+    gasUrl,
+    syncFromSpreadsheet,
+    isLiveSyncing,
   } = useApp();
 
   const [activeClockModal, setActiveClockModal] = useState<'IN' | 'OUT' | null>(null);
@@ -81,6 +86,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-4 pb-12">
+      {/* Missing GAS Web App URL Warning Banner */}
+      {!gasUrl && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-amber-900">Apps Script Belum Terhubung di Perangkat Ini</h4>
+              <p className="text-[11px] text-amber-700 mt-0.5">
+                Agar Clock In, Clock Out, dan Daftarkan Wajah langsung tercatat otomatis ke Google Spreadsheet Anda, hubungkan Web App URL hasil deploy.
+              </p>
+            </div>
+          </div>
+          {onOpenGasSetup && (
+            <button
+              onClick={onOpenGasSetup}
+              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors shrink-0 flex items-center gap-1.5"
+            >
+              <span>Hubungkan URL</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Retail Store Greeting & Date */}
       <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white rounded-3xl p-5 sm:p-6 shadow-lg relative overflow-hidden">
         {/* Subtle decorative background pattern */}
