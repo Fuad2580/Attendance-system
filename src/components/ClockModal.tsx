@@ -87,41 +87,50 @@ export const ClockModal: React.FC<ClockModalProps> = ({
     setIsVerifying(true);
     setVerificationResult(null);
 
-    // Simulate short scanning animation delay
+    // Short scanning animation delay
     await new Promise((resolve) => setTimeout(resolve, 800));
 
     let faceVerified = false;
+    let biometricScore: number | undefined = undefined;
 
     if (config.requireFaceRecognition) {
       // Lookup registered face template in FACE_REGISTER sheet
       const registered = faceRegisters.find((f) => f.nik === currentUser.nik);
 
-      if (!registered && !currentUser.faceRegistered) {
+      if (!registered) {
         setIsVerifying(false);
         setVerificationResult({
           success: false,
-          message: 'Face template not registered yet. Please complete Face Registration first.',
+          message: 'Biometrik wajah Anda belum terdaftar. Silakan lakukan Registrasi Wajah terlebih dahulu.',
         });
         return;
       }
 
-      if (videoRef.current && cameraStream) {
-        const liveVector = extractFaceEmbeddingFromVideo(videoRef.current);
-        if (registered) {
-          const comp = verifyFaceAgainstTemplate(
-            liveVector,
-            registered.faceTemplate,
-            config.faceMatchThreshold
-          );
-          // For demo environment, if camera contrast is low or synthetic, ensure graceful experience
-          faceVerified = comp.matched || comp.score > 0.45;
-        } else {
-          faceVerified = true;
-        }
-      } else {
-        // Camera disabled or simulated
-        faceVerified = true;
+      if (!videoRef.current || !cameraStream) {
+        setIsVerifying(false);
+        setVerificationResult({
+          success: false,
+          message: 'Kamera aktif diperlukan untuk pemindaian wajah langsung.',
+        });
+        return;
       }
+
+      const liveVector = extractFaceEmbeddingFromVideo(videoRef.current);
+      const threshold = config.faceMatchThreshold || 0.65;
+      const comp = verifyFaceAgainstTemplate(liveVector, registered.faceTemplate, threshold);
+      biometricScore = comp.score;
+
+      if (!comp.matched) {
+        setIsVerifying(false);
+        setVerificationResult({
+          success: false,
+          score: comp.score,
+          message: comp.message,
+        });
+        return;
+      }
+
+      faceVerified = true;
     } else {
       faceVerified = true;
     }
@@ -132,7 +141,7 @@ export const ClockModal: React.FC<ClockModalProps> = ({
     setIsVerifying(false);
     setVerificationResult({
       success: res.success,
-      score: 0.92,
+      score: biometricScore,
       message: res.message,
     });
 

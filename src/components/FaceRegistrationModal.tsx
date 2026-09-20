@@ -66,23 +66,33 @@ export const FaceRegistrationModal: React.FC<FaceRegistrationModalProps> = ({ on
     setIsProcessing(true);
     setErrorMessage(null);
 
-    // Multi-frame accumulation animation
+    const vectors: number[][] = [];
+
+    // Multi-frame accumulation animation and feature extraction
     for (let i = 1; i <= 4; i++) {
       setCapturedFramesCount(i);
       await new Promise((resolve) => setTimeout(resolve, 350));
+      if (videoRef.current && cameraStream) {
+        vectors.push(extractFaceEmbeddingFromVideo(videoRef.current));
+      }
     }
 
-    let finalVector: number[];
-
-    if (videoRef.current && cameraStream) {
-      finalVector = extractFaceEmbeddingFromVideo(videoRef.current);
-    } else {
-      // Deterministic synthetic biometric vector based on NIK hash for reliable testing
-      const seed = parseInt(currentUser.nik) || 1234;
-      finalVector = Array.from({ length: 32 }, (_, i) => Math.sin(seed + i * 0.4) * 0.5);
-      const norm = Math.sqrt(finalVector.reduce((acc, v) => acc + v * v, 0)) || 1;
-      finalVector = finalVector.map((v) => v / norm);
+    if (vectors.length === 0) {
+      setIsProcessing(false);
+      setErrorMessage('Kamera tidak terdeteksi atau tidak aktif. Harap izinkan akses kamera untuk merekam wajah Anda.');
+      return;
     }
+
+    // Average collected vectors to produce a clean, stable biometric template
+    const vectorLength = vectors[0].length;
+    const avgVector: number[] = new Array(vectorLength).fill(0);
+    for (const vec of vectors) {
+      for (let i = 0; i < vectorLength; i++) {
+        avgVector[i] += vec[i];
+      }
+    }
+    const norm = Math.sqrt(avgVector.reduce((acc, v) => acc + v * v, 0)) || 1;
+    const finalVector = avgVector.map((v) => v / norm);
 
     const vectorJson = JSON.stringify(finalVector);
     const res = await registerFaceTemplate(currentUser.nik, vectorJson);

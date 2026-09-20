@@ -650,26 +650,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const emp = manpower.find((m) => m.nik === nik);
     if (!emp) return { success: false, message: 'Employee not found.' };
 
-    if (!gasUrl) {
-      return {
-        success: false,
-        message: 'URL Web App Apps Script belum terhubung di perangkat ini. Silakan hubungkan URL di menu GAS Code di atas agar data wajah tersimpan ke Spreadsheet.',
-      };
-    }
-
-    const gasRes = await sendGasAction(gasUrl, 'registerFace', {
-      nik,
-      employeeName: emp.employeeName,
-      faceTemplate: templateJson,
-    });
-
-    if (!gasRes.success) {
-      return {
-        success: false,
-        message: `Gagal menyimpan template wajah ke Spreadsheet: ${gasRes.message}. Pastikan URL Web App benar dan akses diset ke 'Anyone'.`,
-      };
-    }
-
     const now = new Date().toISOString();
     const existingIndex = faceRegisters.findIndex((f) => f.nik === nik);
 
@@ -702,11 +682,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       referenceId: nik,
       oldValue: emp.faceRegistered ? 'TEMPLATE_REGISTERED' : 'UNREGISTERED',
       newValue: 'TEMPLATE_ACTIVE',
-      description: 'Biometric face embedding vector registered successfully to Google Sheets',
+      description: 'Biometric face embedding vector registered locally on device',
     });
 
-    setTimeout(() => syncFromSpreadsheet(), 1200);
-    return { success: true, message: 'Data biometrik wajah berhasil dicatat ke Google Spreadsheet!' };
+    if (gasUrl) {
+      const gasRes = await sendGasAction(gasUrl, 'registerFace', {
+        nik,
+        employeeName: emp.employeeName,
+        faceTemplate: templateJson,
+      });
+
+      if (gasRes.success) {
+        setTimeout(() => syncFromSpreadsheet(), 1200);
+        return { success: true, message: 'Data biometrik wajah berhasil dicatat ke Google Spreadsheet!' };
+      } else {
+        return {
+          success: true,
+          message: `Biometrik wajah tersimpan di perangkat! (Catatan: Sync ke Google Sheets gagal: ${gasRes.message})`,
+        };
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Data biometrik wajah berhasil disimpan di perangkat!',
+    };
   };
 
   // Request & Approval

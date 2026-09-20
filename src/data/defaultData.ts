@@ -80,7 +80,7 @@ export const DEFAULT_MANPOWER: Manpower[] = [
     flexibleAttendance: false,
     supervisorNik: '2001',
     status: 'ACTIVE',
-    faceRegistered: true,
+    faceRegistered: false,
     joinDate: '2024-01-15',
   },
   {
@@ -110,7 +110,7 @@ export const DEFAULT_MANPOWER: Manpower[] = [
     flexibleAttendance: false,
     supervisorNik: '2002',
     status: 'ACTIVE',
-    faceRegistered: true,
+    faceRegistered: false,
     joinDate: '2024-02-10',
   },
   {
@@ -125,7 +125,7 @@ export const DEFAULT_MANPOWER: Manpower[] = [
     flexibleAttendance: false,
     supervisorNik: '3001',
     status: 'ACTIVE',
-    faceRegistered: true,
+    faceRegistered: false,
     joinDate: '2023-05-10',
   },
   {
@@ -140,7 +140,7 @@ export const DEFAULT_MANPOWER: Manpower[] = [
     flexibleAttendance: false,
     supervisorNik: '3001',
     status: 'ACTIVE',
-    faceRegistered: true,
+    faceRegistered: false,
     joinDate: '2023-06-01',
   },
   {
@@ -155,7 +155,7 @@ export const DEFAULT_MANPOWER: Manpower[] = [
     flexibleAttendance: true,
     supervisorNik: '9999',
     status: 'ACTIVE',
-    faceRegistered: true,
+    faceRegistered: false,
     joinDate: '2022-01-10',
   },
   {
@@ -170,7 +170,7 @@ export const DEFAULT_MANPOWER: Manpower[] = [
     flexibleAttendance: true,
     supervisorNik: '',
     status: 'ACTIVE',
-    faceRegistered: true,
+    faceRegistered: false,
     joinDate: '2021-08-01',
   },
 ];
@@ -226,24 +226,7 @@ export const DEFAULT_APPROVALS: ApprovalRecord[] = [
   },
 ];
 
-export const DEFAULT_FACE_REGISTER: FaceRegisterRecord[] = [
-  {
-    nik: '1001',
-    employeeName: 'Andi Pratama',
-    faceTemplate: JSON.stringify(Array.from({ length: 16 }, (_, i) => Math.sin(i + 1) * 0.5)),
-    registeredAt: '2024-01-16T10:00:00+07:00',
-    updatedAt: '2024-01-16T10:00:00+07:00',
-    status: 'ACTIVE',
-  },
-  {
-    nik: '2001',
-    employeeName: 'Budi Santoso',
-    faceTemplate: JSON.stringify(Array.from({ length: 16 }, (_, i) => Math.cos(i + 2) * 0.5)),
-    registeredAt: '2023-05-11T09:00:00+07:00',
-    updatedAt: '2023-05-11T09:00:00+07:00',
-    status: 'ACTIVE',
-  },
-];
+export const DEFAULT_FACE_REGISTER: FaceRegisterRecord[] = [];
 
 export const DEFAULT_AUDIT_LOGS: AuditLogRecord[] = [
   {
