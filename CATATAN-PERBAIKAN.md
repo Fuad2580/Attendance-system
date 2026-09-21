@@ -113,3 +113,64 @@ Saat Clock In, karyawan dengan template lama otomatis diarahkan ke Registrasi Wa
 `cdn.jsdelivr.net` lalu di-cache browser. Kalau klinik ingin bebas CDN, unduh folder
 `model` dari paket `@vladmandic/face-api` ke `public/models/` — kode otomatis memakai
 folder lokal itu kalau ada.
+
+---
+
+# Perbaikan lanjutan — "Clock Out gagal, katanya belum Clock In"
+
+## Penyebab paling mungkin: NIK tidak cocok saat dibandingkan
+
+Baris Clock In dicari dengan `String(data[i][1]).trim() === String(payload.nik).trim()`.
+Masalahnya, **Google Sheets menyimpan NIK yang ditulis lewat `appendRow` sebagai ANGKA**:
+
+| NIK di MANPOWER | Tersimpan di ATTENDANCE | Hasil perbandingan |
+|---|---|---|
+| `0012` (teks) | `12` (angka) | ❌ tidak cocok |
+| `1001` | `1001` | ✅ cocok |
+| `202400123456789` | `2.02400123456789E+14` | ❌ tidak cocok |
+| `1001 ` (ada spasi) | `1001` | ❌ tidak cocok |
+
+Kalau NIK tidak pernah cocok, sistem tidak akan pernah menemukan baris Clock In —
+sehingga Clock Out **selalu** ditolak dengan "Anda belum melakukan Clock In hari ini",
+walaupun barisnya jelas terlihat ada di spreadsheet. Ini juga menjelaskan kenapa
+fallback lama (yang memindai seluruh riwayat) pun tidak menolong: fallback itu juga
+mencocokkan NIK dengan cara yang sama.
+
+## Yang diubah
+
+- `sameNik()` / `nikToText()` di Apps Script dan `nikEquals()` di aplikasi: membandingkan
+  NIK dengan mengabaikan spasi, besar-kecil huruf, angka nol di depan, dan notasi ilmiah.
+  Dipakai di pencarian absensi, template wajah, dan data karyawan.
+- Kolom NIK pada baris absensi baru dipaksa berformat **teks**, jadi tidak berubah lagi.
+- `repairAttendanceFormats()` — fungsi sekali jalan di `SetupSheets.gs` untuk membetulkan
+  **data lama**: menulis ulang kolom NIK, Date, Time, Created At di ATTENDANCE serta NIK
+  di MANPOWER & FACE_REGISTER sebagai teks.
+
+## Alat diagnosa (kalau masih gagal)
+
+Buka di browser, ganti `<NIK>` dengan NIK karyawan yang bermasalah:
+
+```
+<URL Web App Anda>/exec?action=diagnose&nik=<NIK>
+```
+
+Hasilnya JSON berisi:
+
+- `spreadsheetIdUsed` & `spreadsheetMatchesApp` — memastikan Apps Script menulis ke
+  spreadsheet yang sama dengan yang dibaca aplikasi. Kalau `false`, script ter-bind ke
+  file lain: itu penyebabnya, dan yang perlu diperbaiki adalah ID/binding-nya.
+- `spreadsheetTimeZone` — kalau bukan `Asia/Jakarta`, tanggal memang rawan bergeser.
+- `todayStatusForNik` — apa yang dilihat server: `hasClockedIn` / `hasClockedOut`.
+- `last10Rows` — 10 baris terakhir, lengkap dengan `nikRaw`, `nikType` (`number` vs
+  `string`), `matchesQuery`, `dateRaw`, `dateNormalized`, `isToday`.
+
+Kalau `nikType` bernilai `number` dan `matchesQuery` bernilai `false`, dugaan NIK di atas
+terkonfirmasi — jalankan `repairAttendanceFormats()` sekali, lalu coba Clock Out lagi.
+
+## Urutan langkah
+
+1. Salin ulang **`Code.gs`** dan **`SetupSheets.gs`** ke editor Apps Script.
+2. Jalankan **`repairAttendanceFormats()`** sekali dari editor (pilih fungsinya → Run).
+3. **Deploy → Manage deployments → Edit → New version → Deploy.**
+4. Coba Clock Out. Kalau masih gagal, buka URL `?action=diagnose&nik=<NIK>` dan kirimkan
+   hasilnya ke saya.

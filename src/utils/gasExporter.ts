@@ -98,6 +98,80 @@ function initializeRetailAttendanceSheets() {
     faceSheet.getRange('C2:C').setNumberFormat('@');
   }
   Logger.log('Spreadsheet setup completed successfully.');
+}
+
+/**
+ * PERBAIKAN DATA LAMA - jalankan SEKALI dari editor Apps Script.
+ *
+ * Menulis ulang kolom NIK, Date, Time & Created At di sheet ATTENDANCE (dan NIK di MANPOWER
+ * serta FACE_REGISTER) sebagai TEKS. Ini memperbaiki baris lama yang NIK-nya terlanjur
+ * tersimpan sebagai angka (mis. "0012" menjadi 12) atau tanggalnya terlanjur dikonversi
+ * menjadi objek tanggal bertimezone lain - dua hal yang membuat Clock Out ditolak
+ * dengan pesan "Anda belum melakukan Clock In hari ini".
+ */
+function repairAttendanceFormats() {
+  var ss;
+  try {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) ss = SpreadsheetApp.openById('${DEFAULT_SPREADSHEET_ID}');
+  } catch (e) {
+    ss = SpreadsheetApp.openById('${DEFAULT_SPREADSHEET_ID}');
+  }
+
+  function asText(val) {
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'number') {
+      return (Math.abs(val) >= 1e11) ? val.toFixed(0) : String(val);
+    }
+    return String(val).trim();
+  }
+
+  function asDateText(val) {
+    if (!val) return '';
+    if (val instanceof Date) {
+      return Utilities.formatDate(val, 'Asia/Jakarta', 'yyyy-MM-dd');
+    }
+    return String(val).trim();
+  }
+
+  var att = ss.getSheetByName('ATTENDANCE');
+  if (att && att.getLastRow() > 1) {
+    var n = att.getLastRow() - 1;
+    var nikVals = att.getRange(2, 2, n, 1).getValues();
+    var dateVals = att.getRange(2, 4, n, 1).getValues();
+    var timeVals = att.getRange(2, 5, n, 1).getValues();
+
+    var newNik = [];
+    var newDate = [];
+    var newTime = [];
+    for (var i = 0; i < n; i++) {
+      newNik.push([asText(nikVals[i][0])]);
+      newDate.push([asDateText(dateVals[i][0])]);
+      var t = timeVals[i][0];
+      newTime.push([(t instanceof Date) ? Utilities.formatDate(t, 'Asia/Jakarta', 'HH:mm:ss') : String(t || '').trim()]);
+    }
+
+    att.getRange(2, 2, n, 1).setNumberFormat('@').setValues(newNik);
+    att.getRange(2, 4, n, 1).setNumberFormat('@').setValues(newDate);
+    att.getRange(2, 5, n, 1).setNumberFormat('@').setValues(newTime);
+    att.getRange('Q2:Q').setNumberFormat('@');
+  }
+
+  var sheetsWithNik = ['MANPOWER', 'FACE_REGISTER'];
+  for (var s = 0; s < sheetsWithNik.length; s++) {
+    var sh = ss.getSheetByName(sheetsWithNik[s]);
+    if (!sh || sh.getLastRow() < 2) continue;
+    var rows = sh.getLastRow() - 1;
+    var vals = sh.getRange(2, 1, rows, 1).getValues();
+    var fixed = [];
+    for (var j = 0; j < rows; j++) {
+      fixed.push([asText(vals[j][0])]);
+    }
+    sh.getRange(2, 1, rows, 1).setNumberFormat('@').setValues(fixed);
+  }
+
+  SpreadsheetApp.flush();
+  Logger.log('Perbaikan format NIK & tanggal selesai.');
 }`,
 
   'Code.gs': `/**
@@ -158,6 +232,9 @@ function handleRequest(e) {
         break;
       case 'getTodayStatus':
         result = Attendance_todayStatus(params);
+        break;
+      case 'diagnose':
+        result = Diagnose(params);
         break;
       case 'registerFace':
         result = Face_register(params);
@@ -247,11 +324,51 @@ function normalizeGasDate(cellVal) {
 }
 
 /**
+ * Membandingkan NIK secara aman.
+ *
+ * PENYEBAB UMUM "Anda belum melakukan Clock In": Google Sheets menyimpan NIK yang ditulis
+ * lewat appendRow sebagai ANGKA. NIK "0012" jadi 12, dan NIK panjang bisa tampil sebagai
+ * 1.2345E+12. Kalau dibandingkan mentah dengan ===, baris Clock In milik karyawan tidak
+ * pernah ketemu, sehingga Clock Out selalu ditolak.
+ */
+function sameNik(a, b) {
+  var sa = nikToText(a);
+  var sb = nikToText(b);
+  if (!sa || !sb) return false;
+  if (sa === sb) return true;
+  if (sa.toUpperCase() === sb.toUpperCase()) return true;
+
+  var numeric = /^[0-9]+$/;
+  if (numeric.test(sa) && numeric.test(sb)) {
+    var na = sa.replace(/^0+/, '') || '0';
+    var nb = sb.replace(/^0+/, '') || '0';
+    if (na === nb) return true;
+  }
+  return false;
+}
+
+/**
+ * Mengubah nilai sel NIK menjadi teks apa adanya, termasuk membereskan notasi ilmiah
+ * (1.2345E+12) yang muncul kalau NIK panjang tersimpan sebagai angka.
+ */
+function nikToText(val) {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'number') {
+    if (Math.abs(val) >= 1e11 || String(val).indexOf('e') >= 0 || String(val).indexOf('E') >= 0) {
+      return val.toFixed(0);
+    }
+    return String(val);
+  }
+  return String(val).trim();
+}
+
+/**
  * Kolom ATTENDANCE (1-based):
  * 1 Attendance ID | 2 NIK | 3 Employee Name | 4 Date | 5 Time | 6 Type | 7 Location ID
  * 8 Location Name | 9 Homebase | 10 Latitude | 11 Longitude | 12 Accuracy | 13 Distance
  * 14 Attendance Mode | 15 Face Verified | 16 Status | 17 Created At
  */
+var ATT_COL_NIK = 2;
 var ATT_COL_DATE = 4;
 var ATT_COL_TIME = 5;
 var ATT_COL_CREATED = 17;
@@ -264,6 +381,8 @@ var ATT_COL_CREATED = 17;
 function Attendance_appendRow(sheet, row) {
   sheet.appendRow(row);
   var lastRow = sheet.getLastRow();
+  // NIK ikut dipaksa teks supaya "0012" tidak berubah jadi 12 di baris-baris berikutnya
+  sheet.getRange(lastRow, ATT_COL_NIK).setNumberFormat('@').setValue(nikToText(row[ATT_COL_NIK - 1]));
   sheet.getRange(lastRow, ATT_COL_DATE).setNumberFormat('@').setValue(String(row[ATT_COL_DATE - 1]));
   sheet.getRange(lastRow, ATT_COL_TIME).setNumberFormat('@').setValue(String(row[ATT_COL_TIME - 1]));
   sheet.getRange(lastRow, ATT_COL_CREATED).setNumberFormat('@').setValue(String(row[ATT_COL_CREATED - 1]));
@@ -280,10 +399,9 @@ function Attendance_findToday(data, nik) {
   var today = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
   var nowMs = new Date().getTime();
   var result = { hasClockedIn: false, hasClockedOut: false, inTime: '', outTime: '' };
-  var target = String(nik).trim();
 
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][1]).trim() !== target) continue;
+    if (!sameNik(data[i][1], nik)) continue;
 
     var rDate = normalizeGasDate(data[i][3]);
     var rType = String(data[i][5]).trim().toUpperCase();
@@ -375,7 +493,7 @@ function Attendance_clockIn(payload) {
     const attendanceId = payload.attendanceId || ('ATT-' + today.replace(/-/g, '') + '-' + Math.floor(1000 + Math.random() * 9000));
     const newRow = [
       attendanceId,
-      String(payload.nik),
+      nikToText(payload.nik),
       payload.employeeName,
       dateStr,
       timeStr,
@@ -435,7 +553,7 @@ function Attendance_clockOut(payload) {
     const attendanceId = payload.attendanceId || ('ATT-' + today.replace(/-/g, '') + '-' + Math.floor(1000 + Math.random() * 9000));
     const newRow = [
       attendanceId,
-      String(payload.nik),
+      nikToText(payload.nik),
       payload.employeeName,
       dateStr,
       timeStr,
@@ -473,6 +591,74 @@ function Attendance_clockOut(payload) {
 }
 
 /**
+ * ALAT DIAGNOSA.
+ * Buka di browser:  <URL Web App>/exec?action=diagnose&nik=1001
+ * Hasilnya memperlihatkan spreadsheet mana yang dipakai, tanggal hari ini menurut script,
+ * dan 10 baris ATTENDANCE terakhir lengkap dengan bagaimana NIK & tanggalnya terbaca.
+ */
+function Diagnose(payload) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('ATTENDANCE');
+    if (!sheet) return { success: false, message: 'ATTENDANCE sheet not found' };
+
+    const nik = payload && payload.nik ? payload.nik : '';
+    const data = sheet.getDataRange().getValues();
+    const today = Utilities.formatDate(new Date(), 'Asia/Jakarta', 'yyyy-MM-dd');
+
+    const rows = [];
+    for (let i = Math.max(1, data.length - 10); i < data.length; i++) {
+      rows.push({
+        sheetRow: i + 1,
+        nikRaw: String(data[i][1]),
+        nikType: typeof data[i][1],
+        nikAsText: nikToText(data[i][1]),
+        matchesQuery: nik ? sameNik(data[i][1], nik) : null,
+        dateRaw: String(data[i][3]),
+        dateType: (data[i][3] instanceof Date) ? 'Date' : typeof data[i][3],
+        dateNormalized: normalizeGasDate(data[i][3]),
+        isToday: normalizeGasDate(data[i][3]) === today,
+        type: String(data[i][5]),
+        time: String(data[i][4]),
+        createdAt: String(data[i][16])
+      });
+    }
+
+    let manpowerNik = null;
+    const manSheet = ss.getSheetByName('MANPOWER');
+    if (manSheet && nik) {
+      const manData = manSheet.getDataRange().getValues();
+      for (let i = 1; i < manData.length; i++) {
+        if (sameNik(manData[i][0], nik)) {
+          manpowerNik = { sheetRow: i + 1, nikRaw: String(manData[i][0]), nikType: typeof manData[i][0], name: String(manData[i][1]) };
+          break;
+        }
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Diagnostic OK',
+      data: {
+        spreadsheetIdUsed: ss.getId(),
+        spreadsheetName: ss.getName(),
+        spreadsheetIdHardcoded: TARGET_SPREADSHEET_ID,
+        spreadsheetMatchesApp: ss.getId() === TARGET_SPREADSHEET_ID,
+        spreadsheetTimeZone: ss.getSpreadsheetTimeZone(),
+        todayJakarta: today,
+        totalRows: data.length - 1,
+        queriedNik: String(nik),
+        foundInManpower: manpowerNik,
+        todayStatusForNik: nik ? Attendance_findToday(data, nik) : null,
+        last10Rows: rows
+      }
+    };
+  } catch (err) {
+    return { success: false, message: 'Diagnose error: ' + err.toString() };
+  }
+}
+
+/**
  * Register Face Template & update MANPOWER
  */
 function Face_register(payload) {
@@ -491,7 +677,7 @@ function Face_register(payload) {
     let foundFace = false;
 
     for (let i = 1; i < faceData.length; i++) {
-      if (String(faceData[i][0]).trim() == String(payload.nik).trim()) {
+      if (sameNik(faceData[i][0], payload.nik)) {
         faceSheet.getRange(i + 1, 3).setNumberFormat('@').setValue(payload.faceTemplate);
         faceSheet.getRange(i + 1, 5).setNumberFormat('@').setValue(now);
         foundFace = true;
@@ -513,7 +699,7 @@ function Face_register(payload) {
     // Update MANPOWER sheet Face Registered column (col 12)
     const manData = manSheet.getDataRange().getValues();
     for (let i = 1; i < manData.length; i++) {
-      if (String(manData[i][0]).trim() == String(payload.nik).trim()) {
+      if (sameNik(manData[i][0], payload.nik)) {
         manSheet.getRange(i + 1, 12).setValue('TRUE');
         break;
       }

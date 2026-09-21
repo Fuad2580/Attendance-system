@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { isDateToday } from '../utils/dateUtils';
+import { isDateToday, nikEquals } from '../utils/dateUtils';
 import {
   MapPin,
   Clock,
@@ -73,10 +73,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Find today's attendance records for current user (robust date matching across timezones)
   const todayIn = attendance.find(
-    (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
+    (a) => nikEquals(a.nik, currentUser.nik) && isDateToday(a.date) && a.type === 'IN'
   );
   const todayOut = attendance.find(
-    (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'OUT'
+    (a) => nikEquals(a.nik, currentUser.nik) && isDateToday(a.date) && a.type === 'OUT'
   );
 
   // Homebase location
@@ -84,7 +84,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const homebaseName = homebaseObj ? homebaseObj.locationName : currentUser.homebaseLocationId;
 
   // Recent requests for current user
-  const myRecentRequests = requests.filter((r) => r.nik === currentUser.nik).slice(0, 3);
+  const myRecentRequests = requests.filter((r) => nikEquals(r.nik, currentUser.nik)).slice(0, 3);
 
   const isFlexible = currentUser.flexibleAttendance;
   const isGpsOk = isFlexible || geoStatus.isWithinRadius;

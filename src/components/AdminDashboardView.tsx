@@ -1,3 +1,4 @@
+import { nikEquals } from '../utils/dateUtils';
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import {
@@ -90,7 +91,7 @@ export const AdminDashboardView: React.FC = () => {
       if (dateFilter && a.date !== dateFilter) return false;
       if (locationFilter !== 'ALL' && a.locationId !== locationFilter) return false;
 
-      const emp = manpower.find((m) => m.nik === a.nik);
+      const emp = manpower.find((m) => nikEquals(m.nik, a.nik));
       if (departmentFilter !== 'ALL' && emp?.department !== departmentFilter) return false;
 
       if (searchQuery.trim()) {

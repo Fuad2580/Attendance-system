@@ -147,3 +147,29 @@ export function isDateToday(rawDate: string | null | undefined): boolean {
 
   return normalized === localToday || normalized === jakartaToday || normalized === isoUtcToday;
 }
+
+/**
+ * Membandingkan NIK secara aman.
+ *
+ * Google Sheets mengubah NIK yang ditulis lewat appendRow menjadi ANGKA, sehingga
+ * "0012" tersimpan sebagai 12 dan "1001 " kehilangan spasinya. Kalau perbandingan
+ * dilakukan dengan === biasa, baris Clock In milik karyawan tidak pernah ketemu
+ * dan sistem mengira dia belum absen masuk.
+ */
+export function nikEquals(a: string | number | null | undefined, b: string | number | null | undefined): boolean {
+  const sa = String(a ?? '').trim();
+  const sb = String(b ?? '').trim();
+  if (!sa || !sb) return false;
+  if (sa === sb) return true;
+  if (sa.toUpperCase() === sb.toUpperCase()) return true;
+
+  // Keduanya numerik: bandingkan sebagai angka agar "0012" == "12"
+  const numericPattern = /^[0-9]+(\.0+)?$/;
+  if (numericPattern.test(sa) && numericPattern.test(sb)) {
+    const na = sa.replace(/^0+/, '') || '0';
+    const nb = sb.replace(/^0+/, '') || '0';
+    if (na.split('.')[0] === nb.split('.')[0]) return true;
+  }
+
+  return false;
+}

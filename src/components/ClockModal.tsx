@@ -17,6 +17,7 @@ import {
   loadFaceEngine,
   DEFAULT_MAX_DISTANCE,
 } from '../utils/faceBiometrics';
+import { nikEquals } from '../utils/dateUtils';
 
 interface ClockModalProps {
   type: 'IN' | 'OUT';
@@ -124,7 +125,7 @@ export const ClockModal: React.FC<ClockModalProps> = ({
 
     if (config.requireFaceRecognition) {
       // Lookup registered face template in FACE_REGISTER sheet
-      const registered = faceRegisters.find((f) => f.nik === currentUser.nik);
+      const registered = faceRegisters.find((f) => nikEquals(f.nik, currentUser.nik));
 
       if (!registered || !registered.faceTemplate) {
         setIsVerifying(false);

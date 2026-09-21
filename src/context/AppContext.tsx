@@ -28,6 +28,7 @@ import {
   getJakartaTimeString,
   isDateToday,
   normalizeDateString,
+  nikEquals,
 } from '../utils/dateUtils';
 import { DEFAULT_SPREADSHEET_URL, DEFAULT_SPREADSHEET_ID } from '../utils/gasExporter';
 import { DEFAULT_GAS_URL } from '../config/gasConfig';
@@ -389,7 +390,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const currentUser = useMemo(() => {
     if (!currentUserNik) return null;
-    return manpower.find((m) => m.nik === currentUserNik) || null;
+    return manpower.find((m) => nikEquals(m.nik, currentUserNik)) || null;
   }, [currentUserNik, manpower]);
 
   // Compute nearest location from current coordinates and locations list
@@ -479,7 +480,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!nik) return;
     setManpower((prev) => {
       const updated = prev.map((m) =>
-        m.nik === nik ? { ...m, flexibleAttendance: !m.flexibleAttendance } : m
+        nikEquals(m.nik, nik) ? { ...m, flexibleAttendance: !m.flexibleAttendance } : m
       );
       localStorage.setItem(STORAGE_KEYS.MANPOWER, JSON.stringify(updated));
       return updated;
@@ -574,7 +575,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Check if user already clocked in today (supports multiple date formats & timezones)
     const existingIn = attendance.find(
-      (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
+      (a) => nikEquals(a.nik, currentUser.nik) && isDateToday(a.date) && a.type === 'IN'
     );
     if (existingIn) {
       return { success: false, message: `Anda sudah Clock In hari ini pukul ${existingIn.time}.` };
@@ -803,7 +804,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const registerFaceTemplate = async (nik: string, templateJson: string) => {
-    const emp = manpower.find((m) => m.nik === nik);
+    const emp = manpower.find((m) => nikEquals(m.nik, nik));
     if (!emp) return { success: false, message: 'Employee not found.' };
 
     if (!gasUrl) {
@@ -830,7 +831,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const now = new Date().toISOString();
-    const existingIndex = faceRegisters.findIndex((f) => f.nik === nik);
+    const existingIndex = faceRegisters.findIndex((f) => nikEquals(f.nik, nik));
 
     const newEntry: FaceRegisterRecord = {
       nik,
@@ -851,7 +852,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Update manpower faceRegistered field
     setManpower((prev) =>
-      prev.map((m) => (m.nik === nik ? { ...m, faceRegistered: true } : m))
+      prev.map((m) => (nikEquals(m.nik, nik) ? { ...m, faceRegistered: true } : m))
     );
 
     addAuditLog({
@@ -986,7 +987,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setAttendance((prev) =>
         prev.map((att) => {
-          if (att.nik === req.nik && att.date === targetDate && att.type === typeKey) {
+          if (nikEquals(att.nik, req.nik) && att.date === targetDate && att.type === typeKey) {
             addAuditLog({
               nik: currentUser.nik,
               user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
