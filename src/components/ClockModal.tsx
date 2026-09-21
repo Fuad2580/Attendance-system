@@ -37,10 +37,8 @@ export const ClockModal: React.FC<ClockModalProps> = ({
     clockIn,
     clockOut,
     faceRegisters,
-    setSimulatedLocation,
-    calibrateLocation,
-    toggleUserFlexible,
     userCoords,
+    activeZone,
   } = useApp();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -229,7 +227,7 @@ export const ClockModal: React.FC<ClockModalProps> = ({
                 {type === 'IN' ? 'Clock In Attendance' : 'Clock Out Attendance'}
               </h3>
               <p className="text-xs text-slate-500">
-                {currentUser?.employeeName} • NIK: {currentUser?.nik}
+                {currentUser?.employeeName} • NIK: {currentUser?.nik} • {activeZone.code}
               </p>
             </div>
           </div>
@@ -337,37 +335,20 @@ export const ClockModal: React.FC<ClockModalProps> = ({
                 Nearest Store: <strong>{geoStatus.location?.locationName || 'Unknown'}</strong> (Max Radius: {geoStatus.allowedRadius}m)
               </p>
               {!isGpsOk && !isFlexible && (
-                <div className="pt-2 space-y-2 border-t border-rose-200 mt-2">
+                <div className="pt-2 space-y-1.5 border-t border-rose-200 mt-2">
                   <p className="text-[11px] text-rose-800 font-medium leading-relaxed">
-                    Jarak terdeteksi <strong>{geoStatus.distance >= 1000 ? `${(geoStatus.distance / 1000).toFixed(1)} km (${geoStatus.distance.toLocaleString()}m)` : `${geoStatus.distance}m`}</strong> dari toko <strong>{geoStatus.location?.locationName || 'Ruko Puri Indah'}</strong> di Jakarta Barat.
+                    Jarak terdeteksi{' '}
+                    <strong>
+                      {geoStatus.distance >= 1000
+                        ? `${(geoStatus.distance / 1000).toFixed(1)} km`
+                        : `${geoStatus.distance} m`}
+                    </strong>{' '}
+                    dari <strong>{geoStatus.location?.locationName || 'kantor terdekat'}</strong>.
                   </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const locId = currentUser?.homebaseLocationId || geoStatus.location?.locationId || 'LOC001';
-                        const locName = geoStatus.location?.locationName || 'Toko Saya';
-                        calibrateLocation(locId, userCoords.latitude, userCoords.longitude, locName);
-                      }}
-                      className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition-colors shadow-xs"
-                    >
-                      Set Toko ke GPS Saya (Jarak Jadi 0m)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleUserFlexible()}
-                      className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] transition-colors shadow-xs"
-                    >
-                      Mode WFA / Bebas Radius
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSimulatedLocation(-6.18562, 106.73448, 'Ruko Puri (14m - In Radius)')}
-                      className="px-2 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium text-[11px] transition-colors"
-                    >
-                      Simulasi Puri (14m)
-                    </button>
-                  </div>
+                  <p className="text-[11px] text-rose-700 leading-relaxed">
+                    Lokasi absensi ditentukan otomatis dari titik GPS Anda dan tidak dapat diubah
+                    manual. Mendekatlah ke area kantor, atau ajukan Izin/Revisi lewat menu Requests.
+                  </p>
                 </div>
               )}
             </div>

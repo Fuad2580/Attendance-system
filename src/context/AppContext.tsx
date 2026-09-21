@@ -22,6 +22,7 @@ import {
   DEFAULT_AUDIT_LOGS,
 } from '../data/defaultData';
 import { findNearestLocation } from '../utils/geo';
+import { resolveZone, dateInZone, timeInZone, ZoneInfo } from '../utils/timezone';
 import {
   getLocalTodayDate,
   getJakartaTodayDate,
@@ -50,10 +51,10 @@ interface AppContextType {
   updateConfig: (newConfig: Partial<AppConfig>) => void;
   locations: LocationMaster[];
   updateLocations: (locations: LocationMaster[]) => void;
-  calibrateLocation: (locationId: string, lat: number, lon: number, newName?: string) => void;
+
   manpower: Manpower[];
   updateManpower: (manpower: Manpower[]) => void;
-  toggleUserFlexible: (targetNik?: string) => void;
+
   attendance: AttendanceRecord[];
   requests: RequestRecord[];
   approvals: ApprovalRecord[];
@@ -73,8 +74,8 @@ interface AppContextType {
   isGpsLoading: boolean;
   gpsError: string | null;
   refreshGPS: () => void;
-  setSimulatedLocation: (lat: number, lon: number, label?: string) => void;
-  currentSimulatedLabel: string | null;
+  /** Zona waktu kantor terdekat (WIB / WITA / WIT). */
+  activeZone: ZoneInfo;
 
   // Actions
   clockIn: (options?: { faceVerified?: boolean }) => Promise<{ success: boolean; message: string }>;
@@ -229,7 +230,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [isGpsLoading, setIsGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
-  const [currentSimulatedLabel, setCurrentSimulatedLabel] = useState<string | null>('Ruko Puri (14m)');
+
 
   // Sync to localStorage
   useEffect(() => {
@@ -398,6 +399,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return findNearestLocation(userCoords.latitude, userCoords.longitude, locations, config);
   }, [userCoords, locations, config]);
 
+  // Zona waktu mengikuti kantor terdekat, bukan jam perangkat karyawan
+  const activeZone = useMemo(() => resolveZone(geoStatus.location), [geoStatus.location]);
+
   // Real Geolocation querying
   const refreshGPS = useCallback(() => {
     if (!navigator.geolocation) {
@@ -415,7 +419,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           longitude: pos.coords.longitude,
           accuracy: Math.round(pos.coords.accuracy),
         });
-        setCurrentSimulatedLabel(null);
         setIsGpsLoading(false);
       },
       (err) => {
@@ -426,66 +429,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   }, []);
 
-  const setSimulatedLocation = (lat: number, lon: number, label?: string) => {
-    setUserCoords({ latitude: lat, longitude: lon, accuracy: 8 });
-    setCurrentSimulatedLabel(label || null);
-    setGpsError(null);
-  };
-
-  const calibrateLocation = (locationId: string, lat: number, lon: number, newName?: string) => {
-    setLocations((prev) => {
-      const exists = prev.some((l) => l.locationId === locationId);
-      let updated: LocationMaster[];
-      if (exists) {
-        updated = prev.map((loc) =>
-          loc.locationId === locationId
-            ? {
-                ...loc,
-                latitude: parseFloat(lat.toFixed(6)),
-                longitude: parseFloat(lon.toFixed(6)),
-                locationName: newName || loc.locationName,
-              }
-            : loc
-        );
-      } else {
-        const newLoc: LocationMaster = {
-          locationId,
-          locationName: newName || 'Toko Saya (GPS Aktif)',
-          locationType: 'Retail Store',
-          address: 'Lokasi Toko Fisik Terdaftar GPS',
-          latitude: parseFloat(lat.toFixed(6)),
-          longitude: parseFloat(lon.toFixed(6)),
-          radiusMeter: 150,
-          status: 'ACTIVE',
-        };
-        updated = [newLoc, ...prev];
-      }
-      localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(updated));
-      return updated;
-    });
-
-    addAuditLog({
-      nik: currentUser?.nik || 'SYSTEM',
-      user: currentUser ? `${currentUser.employeeName} (${currentUser.roleLevel})` : 'System',
-      action: 'Calibrate Location GPS',
-      referenceId: locationId,
-      oldValue: 'ORIGINAL_COORDS',
-      newValue: `${lat.toFixed(6)}, ${lon.toFixed(6)}`,
-      description: `Lokasi toko ${locationId} disinkronkan ke koordinat GPS fisik (${lat.toFixed(6)}, ${lon.toFixed(6)}). Jarak toko menjadi 0m.`,
-    });
-  };
-
-  const toggleUserFlexible = (targetNik?: string) => {
-    const nik = targetNik || currentUserNik;
-    if (!nik) return;
-    setManpower((prev) => {
-      const updated = prev.map((m) =>
-        nikEquals(m.nik, nik) ? { ...m, flexibleAttendance: !m.flexibleAttendance } : m
-      );
-      localStorage.setItem(STORAGE_KEYS.MANPOWER, JSON.stringify(updated));
-      return updated;
-    });
-  };
+  // Catatan: fungsi ubah lokasi manual (simulasi GPS, kalibrasi titik toko, toggle WFA)
+  // sengaja DIHAPUS. Lokasi absensi selalu ditentukan otomatis dari kantor terdekat
+  // terhadap titik GPS perangkat -- karyawan tidak bisa memindahkannya.
 
   // Auth methods
   const login = (nik: string) => {
@@ -568,10 +514,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentUser) return { success: false, message: 'User is not logged in.' };
     if (!config.allowClockIn) return { success: false, message: 'Clock In is currently disabled by administrator.' };
 
-    // Tanggal & jam mengikuti WIB (Asia/Jakarta) agar identik dengan yang dipakai Apps Script,
-    // meskipun jam/timezone HP karyawan berbeda.
-    const todayStr = getJakartaTodayDate();
-    const nowTimeStr = getJakartaTimeString();
+    // Tanggal & jam mengikuti ZONA WAKTU KANTOR TERDEKAT (WIB/WITA/WIT), bukan jam HP karyawan.
+    const zone = activeZone;
+    const todayStr = dateInZone(zone);
+    const nowTimeStr = timeInZone(zone);
 
     // Check if user already clocked in today (supports multiple date formats & timezones)
     const existingIn = attendance.find(
@@ -672,15 +618,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       description: `Clock In verified at ${newRecord.locationName} (${geoStatus.distance}m from center). Homebase: ${homebaseName}.`,
     });
 
-    return { success: true, message: `Clock In berhasil dicatat di Spreadsheet pada ${nowTimeStr}!` };
+    return { success: true, message: `Clock In berhasil dicatat pada ${nowTimeStr} ${zone.code}!` };
   };
 
   const clockOut = async (options?: { faceVerified?: boolean }) => {
     if (!currentUser) return { success: false, message: 'User is not logged in.' };
     if (!config.allowClockOut) return { success: false, message: 'Clock Out is currently disabled by administrator.' };
 
-    const todayStr = getJakartaTodayDate();
-    const nowTimeStr = getJakartaTimeString();
+    const zone = activeZone;
+    const todayStr = dateInZone(zone);
+    const nowTimeStr = timeInZone(zone);
 
     if (!gasUrl) {
       return {
@@ -693,17 +640,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // State lokal TIDAK dipakai sebagai penghalang, karena cache lokal bisa kosong
     // (mis. halaman baru dibuka, atau sheet tidak dibagikan publik sehingga pembacaan gviz kosong)
     // dan itulah yang dulu membuat Clock Out berhenti sebelum sempat dikirim ke spreadsheet.
-    const serverStatus = await fetchTodayStatusViaGas(gasUrl, currentUser.nik);
+    const serverStatus = await fetchTodayStatusViaGas(gasUrl, currentUser.nik, todayStr);
 
     if (serverStatus && !serverStatus.hasClockedIn) {
       return { success: false, message: 'Clock Out gagal. Anda belum melakukan Clock In hari ini.' };
     }
-    if (serverStatus && serverStatus.hasClockedOut) {
-      return {
-        success: false,
-        message: `Anda sudah melakukan Clock Out hari ini pukul ${serverStatus.outTime || '-'}.`,
-      };
-    }
+
+    // Clock Out boleh diulang: jam terbaru MENIMPA jam sebelumnya (satu baris OUT per hari).
+    const isReplacing = !!(serverStatus && serverStatus.hasClockedOut);
+    const previousOutTime = serverStatus?.outTime || '';
 
     // Biometric Validation
     if (config.requireFaceRecognition && !options?.faceVerified) {
@@ -763,7 +708,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
 
-    const res = await sendGasAction(gasUrl, 'clockOut', newRecord);
+    const res = await sendGasAction(gasUrl, 'clockOut', { ...newRecord, replaceExisting: true });
 
     if (!res.success) {
       // TIDAK ADA LAGI "berhasil palsu". Kalau spreadsheet menolak, user harus tahu.
@@ -783,9 +728,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // Baris sudah benar-benar masuk sheet -> baru perbarui state lokal
-    setAttendance((prev) => [newRecord, ...prev.filter((a) => a.attendanceId !== newRecord.attendanceId)]);
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([newRecord, ...attendance.filter((a) => a.attendanceId !== newRecord.attendanceId)]));
+    // Baris sudah benar-benar masuk sheet -> baru perbarui state lokal.
+    // Baris OUT lama hari ini dibuang supaya UI ikut menampilkan jam terbaru.
+    const dropOldOut = (list: AttendanceRecord[]) =>
+      list.filter(
+        (a) =>
+          a.attendanceId !== newRecord.attendanceId &&
+          !(nikEquals(a.nik, currentUser.nik) && isDateToday(a.date) && a.type === 'OUT')
+      );
+
+    setAttendance((prev) => [newRecord, ...dropOldOut(prev)]);
+    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([newRecord, ...dropOldOut(attendance)]));
 
     // Refresh directly from Google Sheets
     await syncFromSpreadsheet();
@@ -793,14 +746,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addAuditLog({
       nik: currentUser.nik,
       user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
-      action: 'Clock Out',
+      action: isReplacing ? 'Clock Out (Revisi)' : 'Clock Out',
       referenceId: newRecord.attendanceId,
-      oldValue: 'CLOCKED IN',
+      oldValue: isReplacing ? `CLOCKED OUT ${previousOutTime}` : 'CLOCKED IN',
       newValue: `CLOCKED OUT ${nowTimeStr}`,
-      description: `Clock Out recorded at ${nowTimeStr} (${newRecord.locationName}).`,
+      description: isReplacing
+        ? `Clock Out diperbarui dari ${previousOutTime} menjadi ${nowTimeStr} (${newRecord.locationName}).`
+        : `Clock Out recorded at ${nowTimeStr} (${newRecord.locationName}).`,
     });
 
-    return { success: true, message: `Clock Out berhasil dicatat di Spreadsheet pada ${nowTimeStr}!` };
+    return {
+      success: true,
+      message: isReplacing
+        ? `Clock Out diperbarui: ${previousOutTime} → ${nowTimeStr} ${zone.code}. Jam sebelumnya ditimpa.`
+        : `Clock Out berhasil dicatat pada ${nowTimeStr} ${zone.code}!`,
+    };
   };
 
   const registerFaceTemplate = async (nik: string, templateJson: string) => {
@@ -1168,10 +1128,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateConfig,
         locations,
         updateLocations: setLocations,
-        calibrateLocation,
         manpower,
         updateManpower: setManpower,
-        toggleUserFlexible,
         attendance,
         requests,
         approvals,
@@ -1187,8 +1145,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isGpsLoading,
         gpsError,
         refreshGPS,
-        setSimulatedLocation,
-        currentSimulatedLabel,
+        activeZone,
         clockIn,
         clockOut,
         registerFaceTemplate,

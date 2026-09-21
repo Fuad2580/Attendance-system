@@ -174,3 +174,84 @@ terkonfirmasi — jalankan `repairAttendanceFormats()` sekali, lalu coba Clock O
 3. **Deploy → Manage deployments → Edit → New version → Deploy.**
 4. Coba Clock Out. Kalau masih gagal, buka URL `?action=diagnose&nik=<NIK>` dan kirimkan
    hasilnya ke saya.
+
+---
+
+# Perubahan ketiga — lokasi, zona waktu, clock out, dan UI
+
+## 1. Lokasi tidak bisa diubah manual
+
+Semua jalan untuk memindahkan lokasi dihapus dari sisi karyawan:
+
+- Tombol **"Set Toko ke GPS Saya"**, **"Mode WFA / Bebas Radius"**, dan **"Simulasi Puri"**
+  di modal absensi — dihapus.
+- Fungsi `setSimulatedLocation()`, `calibrateLocation()`, dan `toggleUserFlexible()`
+  dihapus dari `AppContext`, jadi tidak ada komponen yang bisa memanggilnya lagi.
+- Koordinat awal palsu (`Ruko Puri 14m`) dihapus; titik selalu dari `navigator.geolocation`.
+
+Lokasi absensi kini **selalu** hasil `findNearestLocation()`: kantor **ACTIVE** terdekat
+dari titik GPS perangkat. Kalau di luar radius, karyawan hanya diberi tahu jaraknya dan
+diarahkan mengajukan Izin/Revisi — tidak ada tombol untuk memaksa.
+
+Master lokasi (koordinat, radius, status) tetap bisa diubah admin lewat sheet
+LOCATION_MASTER — itu data master, bukan pilihan karyawan.
+
+## 2. Zona waktu WIB / WITA / WIT
+
+Jam absensi **tidak lagi mengambil jam HP karyawan** (bisa diubah manual, bisa beda zona).
+Yang dipakai adalah zona waktu **kantor terdekat**:
+
+1. Kolom baru **`Time Zone`** di sheet LOCATION_MASTER (isi `WIB`, `WITA`, atau `WIT`), atau
+2. kalau kolom itu kosong → dideteksi otomatis dari garis bujur kantor:
+   `< 116°BT = WIB`, `116–134°BT = WITA`, `≥ 134°BT = WIT`.
+
+Berkas baru `src/utils/timezone.ts` menyediakan `dateInZone()`, `timeInZone()`,
+`longDateInZone()`, dan `greetingInZone()`. Apps Script ikut menerima tanggal acuan dari
+aplikasi (`payload.date`), jadi absen jam 00:30 WITA tidak lagi dihitung sebagai hari
+sebelumnya menurut WIB. Label zona tampil di topbar, modal absensi, dan pesan hasil absen.
+
+## 3. Clock Out bisa diulang (menimpa)
+
+Dulu Clock Out kedua ditolak. Sekarang: Clock Out jam 14:00 setelah sebelumnya jam 13:00
+akan **menimpa baris OUT hari itu** — `Attendance_clockOut()` menulis ulang baris lama
+(`setValues` pada baris yang sama), bukan menambah baris baru. Jadi tetap satu baris OUT
+per karyawan per hari, dan yang tersimpan selalu jam terakhir.
+
+Perubahan jamnya tetap tercatat di AUDIT_LOG sebagai **"Clock Out (Revisi)"** lengkap
+dengan jam lama → jam baru, sehingga bisa diaudit. Aplikasi memberi pesan
+`Clock Out diperbarui: 13:00:12 → 14:05:31 WIB`.
+
+## 4. UI/UX baru
+
+Layout diganti mengikuti contoh yang Anda kirim:
+
+- **Sidebar kiri** (Dashboard, Attendance Log, Requests, Approvals, Admin Panel, plus
+  Spreadsheet / GAS Code / Keluar). Di layar kecil jadi drawer dengan tombol hamburger.
+- **Topbar** berisi judul halaman, tombol sinkronisasi, notifikasi, dan chip profil
+  (nama, level, zona waktu).
+- **Sapaan + tanggal**: "Selamat Pagi, <nama>" dengan tanggal panjang dan jam
+  `08:42 WIB` yang ikut zona kantor.
+- **Hero widget**: tombol besar Check-In/Check-Out (otomatis berubah sesuai status hari
+  ini), ringkasan jam masuk/pulang, dan pratinjau kamera (klik untuk mengaktifkan — tidak
+  meminta izin kamera diam-diam saat halaman dibuka).
+- **Panel peta** memakai OpenStreetMap embed (tanpa API key), menampilkan titik GPS,
+  kantor terdekat, jarak, radius, dan akurasi.
+- **4 kartu statistik**: Kehadiran %, Tepat Waktu, Terlambat, Izin Disetujui — semuanya
+  dihitung dari data nyata bulan berjalan, bukan angka contoh.
+- **Log Kehadiran Hari Ini**: tabel Nama / Check-In / Check-Out / Total Jam / Status /
+  Lokasi. Karyawan R1 hanya melihat dirinya; R2 ke atas melihat seluruh tim.
+- **Grafik Kehadiran Mingguan**: batang 7 hari terakhir dengan tooltip saat disentuh.
+- **Halaman Attendance Log** baru: filter bulan, pencarian nama/NIK, kolom verifikasi wajah.
+
+Catatan: "Sisa Cuti" pada contoh Anda saya ganti menjadi **Izin Disetujui**, karena di
+spreadsheet belum ada data kuota cuti per karyawan. Kalau kuota cuti mau ditampilkan,
+tambahkan kolom (mis. `Leave Quota`) di sheet MANPOWER dan saya sambungkan.
+
+## Deploy ulang lagi
+
+Sheet LOCATION_MASTER dapat kolom baru dan Apps Script dapat logika baru, jadi:
+
+1. Salin ulang `Code.gs` **dan** `SetupSheets.gs` (ada di folder `apps-script/`).
+2. Tambahkan kolom **`Time Zone`** di kolom I sheet LOCATION_MASTER, isi `WIB`/`WITA`/`WIT`
+   (boleh dikosongkan — akan dideteksi dari bujur).
+3. Deploy → Manage deployments → Edit → **New version** → Deploy.

@@ -61,6 +61,8 @@ export interface LocationMaster {
   longitude: number;
   radiusMeter?: number; // If empty or undefined, uses CONFIG Attendance Radius Meter
   status: 'ACTIVE' | 'INACTIVE';
+  /** WIB | WITA | WIT. Kosong = dideteksi otomatis dari garis bujur. */
+  timeZone?: string;
 }
 
 export interface AttendanceRecord {

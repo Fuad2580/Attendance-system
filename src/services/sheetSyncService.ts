@@ -200,6 +200,7 @@ export async function fetchLiveLocations(spreadsheetId: string): Promise<Locatio
         longitude: parseCoordinate(row[5]),
         radiusMeter: parseCoordinate(row[6], 100),
         status: String(row[7] || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+        timeZone: String(row[8] || '').trim(),
       });
     }
     return list;
@@ -345,6 +346,7 @@ export async function fetchAllDataViaGas(gasUrl: string): Promise<{
       longitude: parseCoordinate(r.longitude),
       radiusMeter: parseCoordinate(r.radiusMeter, 100),
       status: String(r.status || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+      timeZone: String(r.timeZone || '').trim(),
     }));
 
     const requests: RequestRecord[] = (d.requests || []).map((r: any) => ({
@@ -395,10 +397,11 @@ export async function fetchAllDataViaGas(gasUrl: string): Promise<{
  */
 export async function fetchTodayStatusViaGas(
   gasUrl: string,
-  nik: string
+  nik: string,
+  date?: string
 ): Promise<{ hasClockedIn: boolean; hasClockedOut: boolean; inTime?: string; outTime?: string } | null> {
   if (!gasUrl || !nik) return null;
-  const res = await sendGasAction(gasUrl, 'getTodayStatus', { nik });
+  const res = await sendGasAction(gasUrl, 'getTodayStatus', { nik, date });
   if (!res.success || !res.data) return null;
   return {
     hasClockedIn: !!res.data.hasClockedIn,

@@ -1,25 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { isDateToday, nikEquals } from '../utils/dateUtils';
+import { isDateToday, nikEquals, normalizeDateString } from '../utils/dateUtils';
 import {
-  MapPin,
-  Clock,
-  CheckCircle2,
+  dateInZone,
+  longDateInZone,
+  clockInZone,
+  greetingInZone,
+} from '../utils/timezone';
+import {
   AlertTriangle,
-  FileText,
-  Calendar,
-  Sparkles,
   ArrowRight,
-  ShieldCheck,
+  CalendarCheck,
+  CameraOff,
+  CheckCircle2,
+  Clock,
   Camera,
-  Navigation,
-  RefreshCw,
-  Sliders,
-  Compass,
+  LogIn,
+  LogOut,
+  TrendingUp,
+  UserCheck,
 } from 'lucide-react';
 import { ClockModal } from './ClockModal';
 import { FaceRegistrationModal } from './FaceRegistrationModal';
-import { RequestType } from '../types';
+import { LocationMapPanel } from './LocationMapPanel';
+import { WeeklyAttendanceChart } from './WeeklyAttendanceChart';
+import { RequestType, AttendanceRecord } from '../types';
 
 interface DashboardViewProps {
   onOpenNewRequest: (preselectedType?: RequestType) => void;
@@ -28,10 +33,53 @@ interface DashboardViewProps {
   onOpenGasSetup?: () => void;
 }
 
+/** Selisih jam antara dua string HH:mm:ss. */
+function hoursBetween(start?: string, end?: string): string {
+  if (!start || !end) return '-';
+  const toMin = (t: string) => {
+    const p = t.split(':');
+    return parseInt(p[0] || '0', 10) * 60 + parseInt(p[1] || '0', 10);
+  };
+  const diff = toMin(end) - toMin(start);
+  if (isNaN(diff) || diff <= 0) return '-';
+  const h = Math.floor(diff / 60);
+  const m = diff % 60;
+  return m === 0 ? `${h} jam` : `${h}j ${m}m`;
+}
+
+function isLate(time?: string, workStart?: string): boolean {
+  if (!time || !workStart) return false;
+  return time.substring(0, 5) > workStart.substring(0, 5);
+}
+
+const StatCard: React.FC<{
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+  tone: 'emerald' | 'sky' | 'rose' | 'violet';
+}> = ({ label, value, icon, tone }) => {
+  const tones = {
+    emerald: 'bg-emerald-50 text-emerald-600',
+    sky: 'bg-sky-50 text-sky-600',
+    rose: 'bg-rose-50 text-rose-600',
+    violet: 'bg-violet-50 text-violet-600',
+  };
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5">
+      <div className="flex items-start justify-between gap-2">
+        <span className="text-xs font-medium text-slate-500">{label}</span>
+        <span className={`w-7 h-7 rounded-lg flex items-center justify-center ${tones[tone]}`}>
+          {icon}
+        </span>
+      </div>
+      <div className="mt-3 text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">{value}</div>
+    </div>
+  );
+};
+
 export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenNewRequest,
   onViewAllRequests,
-  onOpenSpreadsheet,
   onOpenGasSetup,
 }) => {
   const {
@@ -41,37 +89,49 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     userCoords,
     refreshGPS,
     isGpsLoading,
-    setSimulatedLocation,
-    calibrateLocation,
-    toggleUserFlexible,
-    currentSimulatedLabel,
     attendance,
+    manpower,
     requests,
-    locations,
     gasUrl,
-    syncFromSpreadsheet,
-    isLiveSyncing,
+    activeZone,
   } = useApp();
 
   const [activeClockModal, setActiveClockModal] = useState<'IN' | 'OUT' | null>(null);
   const [showFaceRegModal, setShowFaceRegModal] = useState(false);
-  const [showGeoTester, setShowGeoTester] = useState(false);
-  const [calibrateSuccessMsg, setCalibrateSuccessMsg] = useState<string | null>(null);
+  const [clockTick, setClockTick] = useState(new Date());
+  const [previewOn, setPreviewOn] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const id = setInterval(() => setClockTick(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    if (previewOn) {
+      navigator.mediaDevices
+        .getUserMedia({ video: { facingMode: 'user' }, audio: false })
+        .then((s) => {
+          stream = s;
+          if (previewRef.current) previewRef.current.srcObject = s;
+        })
+        .catch(() => {
+          setPreviewError('Kamera tidak dapat diakses.');
+          setPreviewOn(false);
+        });
+    }
+    return () => {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+  }, [previewOn]);
 
   if (!currentUser) return null;
 
-  // Format today's date
-  const now = new Date();
-  const dateOptions: Intl.DateTimeFormatOptions = {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  };
-  const todayFormatted = now.toLocaleDateString('id-ID', dateOptions);
-  const todayIso = now.toISOString().split('T')[0];
+  const zone = activeZone;
+  const todayKey = dateInZone(zone, clockTick);
 
-  // Find today's attendance records for current user (robust date matching across timezones)
   const todayIn = attendance.find(
     (a) => nikEquals(a.nik, currentUser.nik) && isDateToday(a.date) && a.type === 'IN'
   );
@@ -79,36 +139,80 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     (a) => nikEquals(a.nik, currentUser.nik) && isDateToday(a.date) && a.type === 'OUT'
   );
 
-  // Homebase location
-  const homebaseObj = locations.find((l) => l.locationId === currentUser.homebaseLocationId);
-  const homebaseName = homebaseObj ? homebaseObj.locationName : currentUser.homebaseLocationId;
+  // ---- Statistik bulan berjalan untuk karyawan yang login ----
+  const monthPrefix = todayKey.substring(0, 7);
+  const myMonth = attendance.filter(
+    (a) => nikEquals(a.nik, currentUser.nik) && normalizeDateString(a.date).startsWith(monthPrefix)
+  );
+  const myInDays = new Set(myMonth.filter((a) => a.type === 'IN').map((a) => normalizeDateString(a.date)));
+  const lateDays = myMonth.filter((a) => a.type === 'IN' && isLate(a.time, config.workStartTime)).length;
+  const onTimeDays = Math.max(0, myInDays.size - lateDays);
 
-  // Recent requests for current user
-  const myRecentRequests = requests.filter((r) => nikEquals(r.nik, currentUser.nik)).slice(0, 3);
+  const workingDaysSoFar = (() => {
+    const day = parseInt(todayKey.substring(8, 10), 10);
+    let count = 0;
+    for (let d = 1; d <= day; d++) {
+      const dt = new Date(`${monthPrefix}-${String(d).padStart(2, '0')}T00:00:00`);
+      const wd = dt.getDay();
+      if (wd !== 0) count++; // Minggu libur
+    }
+    return Math.max(1, count);
+  })();
+  const attendanceRate = Math.min(100, Math.round((myInDays.size / workingDaysSoFar) * 100));
 
-  const isFlexible = currentUser.flexibleAttendance;
-  const isGpsOk = isFlexible || geoStatus.isWithinRadius;
+  const approvedLeave = requests.filter(
+    (r) =>
+      nikEquals(r.nik, currentUser.nik) &&
+      String(r.status).toUpperCase() === 'APPROVED' &&
+      normalizeDateString(r.startDate).startsWith(monthPrefix)
+  ).length;
+
+  // ---- Log kehadiran hari ini (semua karyawan untuk R2/R3/ADMIN, diri sendiri untuk R1) ----
+  const canSeeTeam = currentUser.roleLevel !== 'R1';
+  const todayRecords = attendance.filter((a) => isDateToday(a.date));
+  const byNik = new Map<string, { in?: AttendanceRecord; out?: AttendanceRecord }>();
+  todayRecords.forEach((rec) => {
+    if (!canSeeTeam && !nikEquals(rec.nik, currentUser.nik)) return;
+    const key = String(rec.nik).trim();
+    const entry = byNik.get(key) || {};
+    if (rec.type === 'IN') entry.in = rec;
+    else entry.out = rec;
+    byNik.set(key, entry);
+  });
+  const logRows = Array.from(byNik.entries()).map(([nik, v]) => {
+    const emp = manpower.find((m) => nikEquals(m.nik, nik));
+    return {
+      nik,
+      name: emp?.employeeName || v.in?.employeeName || v.out?.employeeName || nik,
+      inTime: v.in?.time,
+      outTime: v.out?.time,
+      location: v.in?.locationName || v.out?.locationName || '-',
+      late: isLate(v.in?.time, config.workStartTime),
+    };
+  });
+
+  const hasClockedIn = !!todayIn;
+  const heroAction: 'IN' | 'OUT' = hasClockedIn ? 'OUT' : 'IN';
 
   return (
-    <div className="space-y-4 pb-12">
-      {/* Missing GAS Web App URL Warning Banner */}
+    <div className="space-y-5 pb-16">
       {!gasUrl && (
-        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0">
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="text-xs font-bold text-amber-900">Apps Script Belum Terhubung di Perangkat Ini</h4>
+              <h4 className="text-xs font-bold text-amber-900">Apps Script belum terhubung</h4>
               <p className="text-[11px] text-amber-700 mt-0.5">
-                Agar Clock In, Clock Out, dan Daftarkan Wajah langsung tercatat otomatis ke Google Spreadsheet Anda, hubungkan Web App URL hasil deploy.
+                Clock In/Out tidak akan tercatat ke Google Sheets sebelum Web App URL dihubungkan.
               </p>
             </div>
           </div>
           {onOpenGasSetup && (
             <button
               onClick={onOpenGasSetup}
-              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors shrink-0 flex items-center gap-1.5"
+              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-colors shrink-0 flex items-center gap-1.5"
             >
               <span>Hubungkan URL</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -117,515 +221,212 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* Retail Store Greeting & Date */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white rounded-3xl p-5 sm:p-6 shadow-lg relative overflow-hidden">
-        {/* Subtle decorative background pattern */}
-        <div className="absolute top-0 right-0 -mt-8 -mr-8 w-48 h-48 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
-        <div className="absolute bottom-0 left-1/3 -mb-8 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
-
-        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* Sapaan + tanggal */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-sm shrink-0">
+            {currentUser.employeeName.charAt(0)}
+          </div>
           <div>
-            <div className="text-[11px] uppercase tracking-wider text-emerald-400 font-bold mb-1 flex items-center gap-1.5">
-              <span>Selamat Pagi • Retail Staff Portal</span>
-              {currentUser.flexibleAttendance && (
-                <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-[9px]">
-                  FLEXIBLE ATTENDANCE
-                </span>
-              )}
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight uppercase">
+            <p className="text-xs text-slate-500">{greetingInZone(zone, clockTick)},</p>
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 leading-tight">
               {currentUser.employeeName}
-            </h1>
-            <p className="text-xs text-slate-300 mt-1">
-              Hari ini: <strong className="text-white">{todayFormatted}</strong>
-            </p>
+            </h2>
           </div>
-
-          {/* Quick Face Register Button & Status */}
-          {config.requireFaceRecognition && (
-            !currentUser.faceRegistered ? (
-              <button
-                onClick={() => setShowFaceRegModal(true)}
-                className="self-start sm:self-auto flex items-center gap-2 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs shadow-md transition-all animate-bounce"
-                title="Wajah belum terdaftar. Klik untuk mendaftarkan biometrik wajah Anda."
-              >
-                <Camera className="w-4 h-4" />
-                <span>Daftar Wajah (Face Biometric)</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => setShowFaceRegModal(true)}
-                className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-emerald-300 border border-emerald-400/30 rounded-xl text-xs font-semibold transition-all backdrop-blur-xs"
-                title="Wajah sudah terdaftar. Klik untuk scan ulang atau memperbarui template wajah."
-              >
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span>Wajah Terdaftar</span>
-                <span className="text-[10px] text-emerald-200/80 font-normal underline ml-0.5">(Update Wajah)</span>
-              </button>
-            )
-          )}
         </div>
+        <div className="sm:text-right">
+          <p className="text-sm font-semibold text-slate-800">{longDateInZone(zone, clockTick)}</p>
+          <p className="text-xs text-slate-500 font-mono">
+            {clockInZone(zone, clockTick)} {zone.code}
+          </p>
+        </div>
+      </div>
 
-        {/* Homebase vs Current GPS Location Grid (Rule 7 & 28) */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-5 pt-5 border-t border-white/10">
-          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Homebase</div>
-            <div className="text-xs sm:text-sm font-bold text-white truncate mt-1">
-              {homebaseName}
-            </div>
-            <div className="text-[10px] text-slate-400 mt-0.5 font-mono">{currentUser.homebaseLocationId}</div>
+      {/* Hero widget + peta */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-4 sm:p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-slate-900">Aksi Cepat</h3>
+            <span className="text-[11px] text-slate-400">Zona {zone.label}</span>
           </div>
 
-          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Location</div>
-            <div className="text-xs sm:text-sm font-bold text-emerald-300 truncate mt-1">
-              {geoStatus.location ? geoStatus.location.locationName : 'Detecting GPS...'}
-            </div>
-            <div className="text-[10px] text-slate-400 mt-0.5">
-              {geoStatus.location?.locationType || 'Retail Outlet'}
-            </div>
-          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="flex flex-col justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setActiveClockModal(heroAction)}
+                className={`w-full py-6 px-4 rounded-2xl text-white font-bold text-base transition-all active:scale-98 flex items-center justify-center gap-2.5 ${
+                  heroAction === 'IN'
+                    ? 'bg-slate-900 hover:bg-slate-800'
+                    : 'bg-rose-600 hover:bg-rose-700'
+                }`}
+              >
+                {heroAction === 'IN' ? <LogIn className="w-5 h-5" /> : <LogOut className="w-5 h-5" />}
+                <span>{heroAction === 'IN' ? 'Check-In Sekarang' : 'Check-Out Sekarang'}</span>
+              </button>
 
-          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Distance to Store</div>
-            <div className="text-xs sm:text-sm font-bold text-white mt-1 flex items-baseline gap-1">
-              <span>{geoStatus.distance >= 1000 ? `${(geoStatus.distance / 1000).toFixed(1)} km` : `${geoStatus.distance} m`}</span>
-              <span className="text-[10px] font-normal text-slate-300">
-                ({geoStatus.distance.toLocaleString()}m)
-              </span>
-            </div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Max radius: {geoStatus.allowedRadius}m</div>
-          </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-slate-200 p-2.5">
+                  <p className="text-[11px] text-slate-500">Check-In</p>
+                  <p className="text-sm font-bold text-slate-900 font-mono">
+                    {todayIn?.time?.substring(0, 5) || '--:--'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 p-2.5">
+                  <p className="text-[11px] text-slate-500">Check-Out</p>
+                  <p className="text-sm font-bold text-slate-900 font-mono">
+                    {todayOut?.time?.substring(0, 5) || '--:--'}
+                  </p>
+                </div>
+              </div>
 
-          <div className="bg-white/5 backdrop-blur-xs p-3 rounded-2xl border border-white/10">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">GPS Status</div>
-            <div
-              className={`text-xs sm:text-sm font-bold mt-1 flex items-center gap-1.5 ${
-                isGpsOk ? 'text-emerald-400' : 'text-rose-400'
-              }`}
-            >
-              {isGpsOk ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                  <span>{isFlexible && !geoStatus.isWithinRadius ? 'FLEXIBLE' : 'VERIFIED'}</span>
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                  <span>OUT OF RANGE</span>
-                </>
+              {todayOut && (
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Sudah check-out pukul {todayOut.time?.substring(0, 5)}. Check-out lagi akan
+                  <strong> menimpa</strong> jam tersebut.
+                </p>
               )}
             </div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Acc: ±{userCoords.accuracy}m</div>
-          </div>
-        </div>
-      </div>
 
-      {/* GPS Location Simulator & Real GPS Bar */}
-      <div className="bg-white rounded-2xl p-3.5 border border-slate-200 shadow-xs">
-        <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-            <span className="font-semibold text-slate-700">GPS Simulator / Coordinate Tool:</span>
-            {currentSimulatedLabel && (
-              <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-medium">
-                {currentSimulatedLabel}
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={refreshGPS}
-              disabled={isGpsLoading}
-              className="px-2.5 py-1 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1"
-              title="Query Browser HTML5 Geolocation"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isGpsLoading ? 'animate-spin' : ''}`} />
-              <span>Real Device GPS</span>
-            </button>
-            <button
-              onClick={() => setShowGeoTester(!showGeoTester)}
-              className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 font-medium flex items-center gap-1"
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span>Preset Ruko</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Expandable Preset Location Buttons */}
-        {showGeoTester && (
-          <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
-            <div className="text-[11px] text-slate-500 font-medium">Pilih preset lokasi toko atau kalibrasi koordinat:</div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <button
-                onClick={() => setSimulatedLocation(-6.18562, 106.73448, 'Ruko Puri (14m - In Radius)')}
-                className="p-2 text-left rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 transition-colors"
-              >
-                <div className="font-bold text-xs">Ruko Puri Indah</div>
-                <div className="text-[10px] text-emerald-700">~14m away (Verified)</div>
-              </button>
-
-              <button
-                onClick={() => setSimulatedLocation(-6.15335, 106.90165, 'Ruko Gading (25m - In Radius)')}
-                className="p-2 text-left rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-900 transition-colors"
-              >
-                <div className="font-bold text-xs">Ruko Kelapa Gading</div>
-                <div className="text-[10px] text-blue-700">~25m away (Cross-store)</div>
-              </button>
-
-              <button
-                onClick={() => setSimulatedLocation(-6.21995, 106.82045, 'Sudirman Head Office (18m)')}
-                className="p-2 text-left rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-900 transition-colors"
-              >
-                <div className="font-bold text-xs">Kantor Sudirman</div>
-                <div className="text-[10px] text-purple-700">~18m away (HQ)</div>
-              </button>
-
-              <button
-                onClick={() => {
-                  const targetId = currentUser.homebaseLocationId || 'LOC001';
-                  calibrateLocation(targetId, userCoords.latitude, userCoords.longitude);
-                  setCalibrateSuccessMsg('Koordinat toko diset ke GPS Anda sekarang (Jarak 0m)!');
-                  setTimeout(() => setCalibrateSuccessMsg(null), 4000);
-                }}
-                className="p-2 text-left rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-950 transition-colors"
-              >
-                <div className="font-bold text-xs">Kalibrasi Toko ke GPS</div>
-                <div className="text-[10px] text-amber-800">Set titik toko ke GPS saat ini</div>
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Geolocation Distance Alert & Quick Calibration Banner */}
-      {!isGpsOk && !isFlexible && (
-        <div className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-300 shadow-xs space-y-3">
-          <div className="flex items-start gap-3">
-            <div className="p-2.5 rounded-xl bg-amber-100 text-amber-900 shrink-0">
-              <Compass className="w-5 h-5" />
-            </div>
-            <div className="flex-1 text-xs">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <span className="font-bold text-amber-950 text-sm">
-                  Jarak Anda Terdeteksi {geoStatus.distance >= 1000 ? `${(geoStatus.distance / 1000).toFixed(1)} km (${geoStatus.distance.toLocaleString()} meter)` : `${geoStatus.distance} meter`} dari {geoStatus.location?.locationName || 'Toko'}
-                </span>
-                <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-bold text-[10px] border border-rose-200">
-                  Di Luar Radius Maks ({geoStatus.allowedRadius}m)
-                </span>
-              </div>
-
-              <div className="mt-2 text-slate-700 leading-relaxed bg-white/80 p-2.5 rounded-xl border border-amber-200 space-y-1">
-                <p className="font-semibold text-amber-950">
-                  📍 Mengapa jarak terdeteksi {geoStatus.distance.toLocaleString()} meter?
-                </p>
-                <p>
-                  Sistem menghitung jarak garis lurus dari <strong>titik fisik GPS perangkat Anda</strong> ({userCoords.latitude.toFixed(5)}, {userCoords.longitude.toFixed(5)}) ke <strong>toko terdaftar ({geoStatus.location?.locationName || 'Ruko Puri Indah'})</strong> ({geoStatus.location?.latitude.toFixed(5)}, {geoStatus.location?.longitude.toFixed(5)} di Jakarta Barat).
-                </p>
-                <p className="text-emerald-800 font-semibold pt-0.5">
-                  ✓ Jika Anda memang sedang berada di toko Anda saat ini, klik tombol hijau di bawah agar titik koordinat toko langsung disamakan dengan GPS Anda (jarak seketika menjadi 0 meter)!
-                </p>
-              </div>
-
-              <div className="mt-3 flex items-center gap-2 flex-wrap">
+            {/* Preview kamera */}
+            <div className="relative rounded-2xl overflow-hidden bg-slate-900 min-h-[150px] flex items-center justify-center">
+              {previewOn ? (
+                <video
+                  ref={previewRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                  style={{ transform: 'scaleX(-1)' }}
+                />
+              ) : (
                 <button
                   type="button"
                   onClick={() => {
-                    const locId = currentUser.homebaseLocationId || geoStatus.location?.locationId || 'LOC001';
-                    const locName = geoStatus.location?.locationName || 'Toko Saya';
-                    calibrateLocation(locId, userCoords.latitude, userCoords.longitude, locName);
-                    setCalibrateSuccessMsg(`Koordinat "${locName}" berhasil disinkronkan ke lokasi GPS Anda (${userCoords.latitude.toFixed(5)}, ${userCoords.longitude.toFixed(5)}). Jarak sekarang 0 meter!`);
-                    setTimeout(() => setCalibrateSuccessMsg(null), 6000);
+                    setPreviewError(null);
+                    setPreviewOn(true);
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors shadow-xs flex items-center gap-1.5"
+                  className="flex flex-col items-center gap-2 text-slate-300 hover:text-white transition-colors px-4 py-6"
                 >
-                  <MapPin className="w-4 h-4" />
-                  <span>Jadikan Titik GPS Saya Sebagai Lokasi Toko (Jarak Jadi 0m)</span>
+                  {previewError ? <CameraOff className="w-7 h-7" /> : <Camera className="w-7 h-7" />}
+                  <span className="text-[11px] font-medium text-center">
+                    {previewError || 'Aktifkan pratinjau kamera'}
+                  </span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => toggleUserFlexible()}
-                  className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs transition-colors shadow-xs flex items-center gap-1.5"
-                >
-                  <Navigation className="w-3.5 h-3.5" />
-                  <span>Mode Bebas Radius / WFA</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSimulatedLocation(-6.18562, 106.73448, 'Ruko Puri (14m - In Radius)')}
-                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs transition-colors border border-slate-300"
-                >
-                  <span>Simulasi Ruko Puri (14m)</span>
-                </button>
-              </div>
-
-              {calibrateSuccessMsg && (
-                <div className="mt-2.5 text-xs font-bold text-emerald-800 bg-emerald-100 p-2.5 rounded-xl border border-emerald-300 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                  <span>{calibrateSuccessMsg}</span>
-                </div>
+              )}
+              {previewOn && (
+                <span className="absolute top-2 left-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-xs">
+                  Pratinjau
+                </span>
               )}
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Main Big Attendance Action Buttons (Rule 5 & 28) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-        {/* Clock In Button */}
-        <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm flex flex-col justify-between space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">
-                IN
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm">Clock In Masuk</h3>
-                <p className="text-[11px] text-slate-500">Jam Masuk Toko: {config.workStartTime}</p>
-              </div>
-            </div>
-            {todayIn && (
-              <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                {todayIn.time.substring(0, 5)}
-              </span>
-            )}
-          </div>
-
-          <div>
+          {config.requireFaceRecognition && !currentUser.faceRegistered && (
             <button
-              onClick={() => setActiveClockModal('IN')}
-              disabled={!!todayIn || !config.allowClockIn}
-              className={`w-full py-4 px-6 rounded-2xl font-bold text-sm tracking-wide shadow-md transition-all flex items-center justify-center gap-2.5 ${
-                todayIn
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 shadow-none'
-                  : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-98'
-              }`}
+              onClick={() => setShowFaceRegModal(true)}
+              className="mt-3 w-full py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold hover:bg-amber-100 transition-colors"
             >
-              <Clock className="w-5 h-5" />
-              <span>{todayIn ? `SUDAH CLOCK IN (${todayIn.time})` : 'CLOCK IN SEKARANG'}</span>
+              Wajah belum terdaftar — daftarkan sekarang
             </button>
-          </div>
-
-          <div className="text-[11px] text-slate-500 text-center">
-            {todayIn ? (
-              <span className="text-emerald-700 font-medium">
-                ✓ Recorded at {todayIn.locationName} ({todayIn.distance}m)
-              </span>
-            ) : (
-              <span>Wajib verifikasi wajah & radius GPS</span>
-            )}
-          </div>
+          )}
         </div>
 
-        {/* Clock Out Button */}
-        <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm flex flex-col justify-between space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold text-xs">
-                OUT
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm">Clock Out Pulang</h3>
-                <p className="text-[11px] text-slate-500">Jam Pulang Toko: {config.workEndTime}</p>
-              </div>
-            </div>
-            {todayOut && (
-              <span className="px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 text-xs font-bold flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                {todayOut.time.substring(0, 5)}
-              </span>
-            )}
-          </div>
-
-          <div>
-            <button
-              onClick={() => setActiveClockModal('OUT')}
-              disabled={!todayIn || !!todayOut || !config.allowClockOut}
-              className={`w-full py-4 px-6 rounded-2xl font-bold text-sm tracking-wide shadow-md transition-all flex items-center justify-center gap-2.5 ${
-                !todayIn
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 shadow-none'
-                  : todayOut
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 shadow-none'
-                  : 'bg-rose-600 hover:bg-rose-700 text-white active:scale-98'
-              }`}
-            >
-              <Clock className="w-5 h-5" />
-              <span>
-                {!todayIn
-                  ? 'CLOCK IN TERLEBIH DAHULU'
-                  : todayOut
-                  ? `SUDAH CLOCK OUT (${todayOut.time})`
-                  : 'CLOCK OUT SEKARANG'}
-              </span>
-            </button>
-          </div>
-
-          <div className="text-[11px] text-slate-500 text-center">
-            {todayOut ? (
-              <span className="text-rose-700 font-medium">
-                ✓ Recorded at {todayOut.locationName} ({todayOut.distance}m)
-              </span>
-            ) : !todayIn ? (
-              <span className="text-slate-400">Tidak dapat Clock Out tanpa Clock In</span>
-            ) : (
-              <span>Pastikan shift kerja selesai sebelum clock out</span>
-            )}
-          </div>
-        </div>
+        <LocationMapPanel
+          latitude={userCoords.latitude}
+          longitude={userCoords.longitude}
+          accuracy={userCoords.accuracy}
+          geoStatus={geoStatus}
+          isFlexible={currentUser.flexibleAttendance}
+          isGpsLoading={isGpsLoading}
+          onRefresh={refreshGPS}
+        />
       </div>
 
-      {/* Today's Attendance Detail Card */}
-      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs">
-        <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2 mb-3">
-          <Calendar className="w-4 h-4 text-indigo-600" />
-          <span>Status Kehadiran Hari Ini</span>
-        </h3>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-            <div className="text-slate-500 text-[11px] font-medium">Clock In</div>
-            <div className="text-base font-bold text-slate-900 mt-1">
-              {todayIn ? todayIn.time : 'Belum Ada'}
-            </div>
-            <div className="text-[11px] text-slate-500 truncate mt-0.5">
-              {todayIn ? `${todayIn.locationName} (${todayIn.distance}m)` : 'Menunggu kedatangan'}
-            </div>
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-            <div className="text-slate-500 text-[11px] font-medium">Clock Out</div>
-            <div className="text-base font-bold text-slate-900 mt-1">
-              {todayOut ? todayOut.time : 'Belum Ada'}
-            </div>
-            <div className="text-[11px] text-slate-500 truncate mt-0.5">
-              {todayOut ? `${todayOut.locationName} (${todayOut.distance}m)` : 'Shift masih berjalan'}
-            </div>
-          </div>
-        </div>
+      {/* Kartu statistik */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <StatCard label="Kehadiran" value={`${attendanceRate}%`} tone="emerald" icon={<TrendingUp className="w-4 h-4" />} />
+        <StatCard label="Tepat Waktu" value={`${onTimeDays} Hari`} tone="sky" icon={<Clock className="w-4 h-4" />} />
+        <StatCard label="Terlambat" value={`${lateDays} Hari`} tone="rose" icon={<AlertTriangle className="w-4 h-4" />} />
+        <StatCard label="Izin Disetujui" value={`${approvedLeave}`} tone="violet" icon={<CalendarCheck className="w-4 h-4" />} />
       </div>
 
-      {/* Quick Actions (Overtime, Revision, Leaves) */}
-      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-500" />
-            <span>Quick Request Actions</span>
-          </h3>
-          <span className="text-[11px] text-slate-500">Auto-routes to direct supervisor</span>
+      {/* Log hari ini + grafik */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="px-4 sm:px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+            <h3 className="text-sm font-bold text-slate-900">Log Kehadiran Hari Ini</h3>
+            <span className="text-[11px] text-slate-400">{logRows.length} karyawan</span>
+          </div>
+
+          {logRows.length === 0 ? (
+            <div className="px-5 py-10 text-center text-xs text-slate-400">
+              Belum ada absensi tercatat hari ini.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-slate-500 bg-slate-50/70">
+                    <th className="px-4 sm:px-5 py-2.5 font-semibold">Nama</th>
+                    <th className="px-3 py-2.5 font-semibold">Check-In</th>
+                    <th className="px-3 py-2.5 font-semibold">Check-Out</th>
+                    <th className="px-3 py-2.5 font-semibold">Total</th>
+                    <th className="px-3 py-2.5 font-semibold">Status</th>
+                    <th className="px-3 py-2.5 font-semibold">Lokasi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logRows.map((row) => (
+                    <tr key={row.nik} className="border-t border-slate-100">
+                      <td className="px-4 sm:px-5 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-7 h-7 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-[11px] font-bold shrink-0">
+                            {row.name.charAt(0)}
+                          </span>
+                          <span className="font-medium text-slate-800 whitespace-nowrap">{row.name}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 font-mono text-slate-600">{row.inTime?.substring(0, 8) || '-'}</td>
+                      <td className="px-3 py-3 font-mono text-slate-600">{row.outTime?.substring(0, 8) || '-'}</td>
+                      <td className="px-3 py-3 text-slate-600 whitespace-nowrap">
+                        {hoursBetween(row.inTime, row.outTime)}
+                      </td>
+                      <td className="px-3 py-3">
+                        {row.late ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 font-semibold">
+                            <AlertTriangle className="w-3 h-3" /> Terlambat
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold">
+                            <CheckCircle2 className="w-3 h-3" /> Tepat Waktu
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-slate-500 max-w-[160px] truncate">{row.location}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          <button
-            onClick={() => onOpenNewRequest('Overtime')}
-            className="p-3 text-left rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors group"
-          >
-            <div className="text-xs font-bold text-slate-800 group-hover:text-indigo-700">
-              Lembur (Overtime)
-            </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">Stock opname / shift ekstra</div>
-          </button>
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5">
+          <h3 className="text-sm font-bold text-slate-900">Grafik Kehadiran Mingguan</h3>
+          <p className="text-[11px] text-slate-400 mt-0.5 mb-2">Jumlah karyawan hadir, 7 hari terakhir</p>
+          <WeeklyAttendanceChart attendance={attendance} today={todayKey} />
 
-          <button
-            onClick={() => onOpenNewRequest('Clock In Revision')}
-            className="p-3 text-left rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors group"
-          >
-            <div className="text-xs font-bold text-slate-800 group-hover:text-indigo-700">
-              Revisi Clock In
-            </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">Koreksi jam datang</div>
-          </button>
-
-          <button
-            onClick={() => onOpenNewRequest('Clock Out Revision')}
-            className="p-3 text-left rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors group"
-          >
-            <div className="text-xs font-bold text-slate-800 group-hover:text-indigo-700">
-              Revisi Clock Out
-            </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">Koreksi jam pulang</div>
-          </button>
-
-          <button
-            onClick={() => onOpenNewRequest('Sick Leave')}
-            className="p-3 text-left rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors group"
-          >
-            <div className="text-xs font-bold text-slate-800 group-hover:text-indigo-700">
-              Izin Sakit
-            </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">Lampiran surat dokter</div>
-          </button>
-
-          <button
-            onClick={() => onOpenNewRequest('Annual Leave')}
-            className="p-3 text-left rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors group"
-          >
-            <div className="text-xs font-bold text-slate-800 group-hover:text-indigo-700">
-              Cuti Tahunan
-            </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">Pengajuan libur tahunan</div>
-          </button>
-        </div>
-      </div>
-
-      {/* My Requests Recent List with Multi-level Timeline */}
-      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-            <FileText className="w-4 h-4 text-indigo-600" />
-            <span>Riwayat Pengajuan Saya</span>
-          </h3>
           <button
             onClick={onViewAllRequests}
-            className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold flex items-center gap-1"
+            className="mt-3 w-full py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50 transition-colors flex items-center justify-center gap-1.5"
           >
-            <span>Lihat Semua</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            <UserCheck className="w-3.5 h-3.5" />
+            Lihat Pengajuan Saya
           </button>
         </div>
-
-        {myRecentRequests.length === 0 ? (
-          <div className="text-center py-6 text-slate-400 text-xs">
-            Belum ada pengajuan request aktif.
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-100">
-            {myRecentRequests.map((req) => (
-              <div key={req.requestId} className="py-3 flex items-center justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-xs text-slate-900">{req.requestType}</span>
-                    <span className="text-[10px] font-mono text-slate-400">{req.requestId}</span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5 truncate max-w-xs sm:max-w-md">
-                    {req.reason} • Tgl: {req.startDate}
-                  </p>
-                </div>
-
-                <div className="text-right shrink-0">
-                  <span
-                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold inline-block ${
-                      req.status === 'APPROVED'
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : req.status === 'REJECTED'
-                        ? 'bg-rose-100 text-rose-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
-                  >
-                    {req.status}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* Clock Modal */}
       {activeClockModal && (
         <ClockModal
           type={activeClockModal}
@@ -633,11 +434,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           onOpenFaceRegistration={() => setShowFaceRegModal(true)}
         />
       )}
-
-      {/* Face Registration Modal */}
-      {showFaceRegModal && (
-        <FaceRegistrationModal onClose={() => setShowFaceRegModal(false)} />
-      )}
+      {showFaceRegModal && <FaceRegistrationModal onClose={() => setShowFaceRegModal(false)} />}
     </div>
   );
 };

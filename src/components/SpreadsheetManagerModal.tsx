@@ -1,3 +1,4 @@
+import { resolveZone } from '../utils/timezone';
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import {
@@ -563,6 +564,7 @@ export const SpreadsheetManagerModal: React.FC<SpreadsheetManagerModalProps> = (
                       <th className="py-2.5 px-3">Latitude</th>
                       <th className="py-2.5 px-3">Longitude</th>
                       <th className="py-2.5 px-3">Radius (m)</th>
+                      <th className="py-2.5 px-3">Zona</th>
                       <th className="py-2.5 px-3">Status</th>
                     </tr>
                   </thead>
@@ -578,6 +580,10 @@ export const SpreadsheetManagerModal: React.FC<SpreadsheetManagerModalProps> = (
                         <td className="py-2 px-3 font-mono text-[11px]">{loc.longitude}</td>
                         <td className="py-2 px-3 font-bold text-emerald-700">
                           {loc.radiusMeter || `${config.attendanceRadiusMeter} (Default)`}
+                        </td>
+                        <td className="py-2 px-3 font-semibold text-slate-600">
+                          {resolveZone(loc).code}
+                          {!loc.timeZone && <span className="text-slate-400 font-normal"> (auto)</span>}
                         </td>
                         <td className="py-2 px-3 font-semibold text-emerald-700">{loc.status}</td>
                       </tr>
