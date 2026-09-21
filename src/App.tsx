@@ -6,6 +6,7 @@ import { DashboardView } from './components/DashboardView';
 import { AttendanceLogView } from './components/AttendanceLogView';
 import { MonthlyRecapView } from './components/MonthlyRecapView';
 import { TeamView } from './components/TeamView';
+import { ScheduleAdminView } from './components/ScheduleAdminView';
 import { RequestsView } from './components/RequestsView';
 import { ApprovalsView } from './components/ApprovalsView';
 import { AdminDashboardView } from './components/AdminDashboardView';
@@ -44,6 +45,7 @@ const MainLayout: React.FC = () => {
     log: 'Attendance Log',
     recap: 'Rekap Bulanan',
     team: 'Tim Saya',
+    schedule: 'Atur Jadwal',
     requests: 'Requests',
     approvals: 'Approvals',
     admin: 'Admin Panel',
@@ -115,6 +117,8 @@ const MainLayout: React.FC = () => {
           {activeTab === 'recap' && <MonthlyRecapView />}
 
           {activeTab === 'team' && <TeamView />}
+
+          {activeTab === 'schedule' && <ScheduleAdminView />}
 
           {activeTab === 'requests' && (
             <RequestsView

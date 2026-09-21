@@ -42,6 +42,7 @@ import {
   fetchLiveConfig,
   fetchLiveFaceRegisters,
   fetchLiveSchedules,
+  saveScheduleBatchViaGas,
   fetchAllDataViaGas,
   fetchTodayStatusViaGas,
   sendGasAction,
@@ -80,6 +81,10 @@ interface AppContextType {
   activeZone: ZoneInfo;
   schedules: ScheduleRecord[];
   saveSchedule: (schedule: ScheduleRecord) => Promise<{ success: boolean; message: string }>;
+  saveSchedules: (
+    rows: ScheduleRecord[],
+    onProgress?: (done: number, total: number) => void
+  ) => Promise<{ success: boolean; message: string; saved: number }>;
 
   // Actions
   clockIn: (options?: { faceVerified?: boolean }) => Promise<{ success: boolean; message: string }>;
@@ -787,50 +792,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   /**
-   * Menyimpan / memperbarui jadwal kerja seorang karyawan ke sheet SCHEDULE.
+   * Menyimpan banyak baris jadwal sekaligus (planner harian maupun hasil unggah Excel).
+   * Baris dengan Schedule ID sama akan ditimpa, jadi unggah ulang tidak menggandakan data.
    */
-  const saveSchedule = async (schedule: ScheduleRecord) => {
+  const saveSchedules = async (
+    rows: ScheduleRecord[],
+    onProgress?: (done: number, total: number) => void
+  ) => {
     if (!gasUrl) {
       return {
         success: false,
         message: 'Belum terhubung ke Google Apps Script, jadwal tidak dapat disimpan.',
+        saved: 0,
       };
     }
 
-    const payload: ScheduleRecord = {
-      ...schedule,
+    const prepared = rows.map((r) => ({
+      ...r,
       scheduleId:
-        schedule.scheduleId ||
-        `SCH-${String(schedule.nik).trim()}-${String(schedule.effectiveDate || '').replace(/-/g, '')}`,
-    };
+        r.scheduleId ||
+        `SCH-${String(r.date || '').replace(/-/g, '')}-${String(r.nik).trim()}`,
+    }));
 
-    const res = await sendGasAction(gasUrl, 'saveSchedule', payload);
-    if (!res.success) {
-      return { success: false, message: `Gagal menyimpan jadwal: ${res.message}` };
+    const res = await saveScheduleBatchViaGas(gasUrl, prepared, onProgress);
+
+    if (res.saved > 0) {
+      setSchedules((prev) => {
+        const map = new Map(prev.map((s) => [s.scheduleId, s]));
+        prepared.slice(0, res.saved).forEach((r) => map.set(r.scheduleId, r));
+        return Array.from(map.values());
+      });
+
+      addAuditLog({
+        nik: currentUser?.nik || 'SYSTEM',
+        user: currentUser ? `${currentUser.employeeName} (${currentUser.roleLevel})` : 'System',
+        action: 'Schedule Update',
+        referenceId: 'SCHEDULE',
+        oldValue: '-',
+        newValue: `${res.saved} baris`,
+        description: `Jadwal diperbarui sebanyak ${res.saved} baris melalui web app.`,
+      });
+
+      setTimeout(() => syncFromSpreadsheet(), 1200);
     }
 
-    setSchedules((prev) => {
-      const idx = prev.findIndex((s) => s.scheduleId === payload.scheduleId);
-      if (idx >= 0) {
-        const copy = [...prev];
-        copy[idx] = payload;
-        return copy;
-      }
-      return [...prev, payload];
-    });
+    return res;
+  };
 
-    addAuditLog({
-      nik: currentUser?.nik || 'SYSTEM',
-      user: currentUser ? `${currentUser.employeeName} (${currentUser.roleLevel})` : 'System',
-      action: 'Schedule Update',
-      referenceId: payload.scheduleId,
-      oldValue: '-',
-      newValue: `${payload.startTime}-${payload.endTime} (${payload.workDays})`,
-      description: `Jadwal ${payload.employeeName} diperbarui, berlaku ${payload.effectiveDate}.`,
-    });
-
-    setTimeout(() => syncFromSpreadsheet(), 1000);
-    return { success: true, message: 'Jadwal tersimpan di sheet SCHEDULE.' };
+  const saveSchedule = async (schedule: ScheduleRecord) => {
+    const res = await saveSchedules([schedule]);
+    return { success: res.success, message: res.message };
   };
 
   const registerFaceTemplate = async (nik: string, templateJson: string) => {
@@ -1218,6 +1229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeZone,
         schedules,
         saveSchedule,
+        saveSchedules,
         clockIn,
         clockOut,
         registerFaceTemplate,

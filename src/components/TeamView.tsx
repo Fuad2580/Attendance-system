@@ -4,9 +4,7 @@ import { nikEquals, normalizeDateString } from '../utils/dateUtils';
 import { dateInZone, timeInZone } from '../utils/timezone';
 import { computeDayStatus, resolveSchedule, minutesToLabel } from '../utils/schedule';
 import { StatusChip, OvertimeChip } from './StatusChip';
-import { ScheduleEditorModal } from './ScheduleEditorModal';
-import { CalendarClock, Users, Search } from 'lucide-react';
-import { Manpower } from '../types';
+import { Users, Search } from 'lucide-react';
 
 /**
  * Tab "Tim Saya" — atasan melihat anggota timnya (Supervisor NIK = dirinya).
@@ -14,7 +12,6 @@ import { Manpower } from '../types';
  */
 export const TeamView: React.FC = () => {
   const { currentUser, manpower, attendance, requests, schedules, config, activeZone } = useApp();
-  const [editing, setEditing] = useState<Manpower | null>(null);
   const [query, setQuery] = useState('');
 
   const today = dateInZone(activeZone);
@@ -127,7 +124,6 @@ export const TeamView: React.FC = () => {
                   <th className="px-3 py-2.5 font-semibold">Pulang</th>
                   <th className="px-3 py-2.5 font-semibold">Status Hari Ini</th>
                   <th className="px-3 py-2.5 font-semibold">Bulan Ini</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">Aksi</th>
                 </tr>
               </thead>
               <tbody>
@@ -155,6 +151,7 @@ export const TeamView: React.FC = () => {
                       <p className="text-[11px] text-slate-400">
                         {r.schedule.shiftName}
                         {r.schedule.source === 'CONFIG' && ' (default)'}
+                        {r.schedule.source === 'UNSCHEDULED' && ' — tidak dijadwalkan'}
                       </p>
                     </td>
                     <td className="px-3 py-3 font-mono text-slate-600">
@@ -179,15 +176,6 @@ export const TeamView: React.FC = () => {
                         <p className="text-[11px] text-orange-600">{r.pendingReq} pengajuan menunggu</p>
                       )}
                     </td>
-                    <td className="px-3 py-3 text-right">
-                      <button
-                        onClick={() => setEditing(r.member)}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-[11px] font-semibold hover:bg-slate-50 whitespace-nowrap"
-                      >
-                        <CalendarClock className="w-3.5 h-3.5" />
-                        Atur Jadwal
-                      </button>
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -196,7 +184,6 @@ export const TeamView: React.FC = () => {
         </div>
       )}
 
-      {editing && <ScheduleEditorModal employee={editing} onClose={() => setEditing(null)} />}
     </div>
   );
 };

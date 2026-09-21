@@ -37,16 +37,18 @@ export interface AppConfig {
 
 /**
  * Satu baris jadwal kerja di sheet SCHEDULE.
- * Jadwal berlaku per karyawan dan per periode (effectiveDate .. endDate),
- * sehingga perubahan shift tidak merusak riwayat absensi bulan sebelumnya.
+ *
+ * MODEL: satu baris = SATU ORANG pada SATU TANGGAL.
+ * Admin mem-plot "tanggal sekian, siapa masuk, jam berapa sampai jam berapa".
+ * Tidak ada baris untuk tanggal tertentu = orang itu tidak dijadwalkan (libur).
  */
 export interface ScheduleRecord {
+  /** SCH-<YYYYMMDD>-<NIK> */
   scheduleId: string;
+  date: string;
   nik: string;
   employeeName: string;
   shiftName: string;
-  /** Hari kerja: 0=Minggu ... 6=Sabtu, mis. "1,2,3,4,5,6" */
-  workDays: string;
   startTime: string;
   endTime: string;
   breakMinutes: number;
@@ -54,9 +56,9 @@ export interface ScheduleRecord {
   lateToleranceMinutes: number;
   /** Lembur baru dihitung setelah sekian menit lewat jam pulang */
   overtimeAfterMinutes: number;
-  effectiveDate: string;
-  endDate?: string;
-  status: 'ACTIVE' | 'INACTIVE';
+  /** SCHEDULED = masuk, OFF = diliburkan secara eksplisit */
+  status: 'SCHEDULED' | 'OFF';
+  notes?: string;
 }
 
 export interface Manpower {

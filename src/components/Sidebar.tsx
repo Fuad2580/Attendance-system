@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   ClipboardList,
   CalendarRange,
+  CalendarClock,
   Users,
   FileText,
   CheckSquare,
@@ -14,7 +15,15 @@ import {
   X,
 } from 'lucide-react';
 
-export type TabKey = 'dashboard' | 'log' | 'recap' | 'team' | 'requests' | 'approvals' | 'admin';
+export type TabKey =
+  | 'dashboard'
+  | 'log'
+  | 'recap'
+  | 'team'
+  | 'schedule'
+  | 'requests'
+  | 'approvals'
+  | 'admin';
 
 interface SidebarProps {
   activeTab: TabKey;
@@ -44,6 +53,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { key: 'log', label: 'Attendance Log', icon: <ClipboardList className="w-4 h-4" />, show: true },
     { key: 'recap', label: 'Rekap Bulanan', icon: <CalendarRange className="w-4 h-4" />, show: true },
     { key: 'team', label: 'Tim Saya', icon: <Users className="w-4 h-4" />, show: isSupervisor },
+    {
+      key: 'schedule',
+      label: 'Atur Jadwal',
+      icon: <CalendarClock className="w-4 h-4" />,
+      show: currentUser.roleLevel === 'ADMIN',
+    },
     { key: 'requests', label: 'Requests', icon: <FileText className="w-4 h-4" />, show: true },
     { key: 'approvals', label: 'Approvals', icon: <CheckSquare className="w-4 h-4" />, show: isSupervisor },
     { key: 'admin', label: 'Admin Panel', icon: <Settings2 className="w-4 h-4" />, show: isAdmin },

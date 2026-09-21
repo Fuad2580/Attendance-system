@@ -9,14 +9,16 @@ import { AppConfig, AttendanceRecord, RequestRecord, ScheduleRecord } from '../t
 import { nikEquals, normalizeDateString } from './dateUtils';
 
 export interface EffectiveSchedule {
-  source: 'SCHEDULE' | 'CONFIG';
+  /** ROSTER = ada baris untuk tanggal itu, CONFIG = belum ada roster sama sekali */
+  source: 'ROSTER' | 'CONFIG' | 'UNSCHEDULED';
   shiftName: string;
-  workDays: number[];
   startTime: string;
   endTime: string;
   breakMinutes: number;
   lateToleranceMinutes: number;
   overtimeAfterMinutes: number;
+  /** true kalau hari itu memang hari kerja untuk orang ini */
+  isWorkDay: boolean;
 }
 
 export type StatusCode =
@@ -68,35 +70,37 @@ export function minutesToLabel(mins: number): string {
   return `${h}j ${m}m`;
 }
 
-function parseWorkDays(raw: string | undefined, fallback: number[]): number[] {
-  const s = String(raw || '').trim();
-  if (!s) return fallback;
-  const out: number[] = [];
-  s.split(/[,;\s]+/).forEach((token) => {
-    const t = token.trim().toUpperCase();
-    if (!t) return;
-    const map: Record<string, number> = {
-      MIN: 0, MINGGU: 0, SUN: 0,
-      SEN: 1, SENIN: 1, MON: 1,
-      SEL: 2, SELASA: 2, TUE: 2,
-      RAB: 3, RABU: 3, WED: 3,
-      KAM: 4, KAMIS: 4, THU: 4,
-      JUM: 5, JUMAT: 5, FRI: 5,
-      SAB: 6, SABTU: 6, SAT: 6,
-    };
-    if (map[t] !== undefined) {
-      out.push(map[t]);
-      return;
-    }
-    const n = parseInt(t, 10);
-    if (!isNaN(n) && n >= 0 && n <= 6) out.push(n);
-  });
-  return out.length > 0 ? out : fallback;
+/** Normalisasi jam "8:0" / "08.00" / "0800" menjadi "08:00". */
+export function normalizeTime(raw: any): string {
+  if (raw === null || raw === undefined) return '';
+  const s = String(raw).trim();
+  if (!s) return '';
+
+  // Nilai waktu dari Excel bisa berupa pecahan hari (0.333 = 08:00)
+  const asNumber = Number(s);
+  if (!isNaN(asNumber) && asNumber > 0 && asNumber < 1) {
+    const totalMinutes = Math.round(asNumber * 24 * 60);
+    return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+  }
+
+  const m = s.match(/^(\d{1,2})[:.\s]?(\d{2})/);
+  if (m) {
+    const h = Math.min(23, parseInt(m[1], 10));
+    const mi = Math.min(59, parseInt(m[2], 10));
+    return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`;
+  }
+  return s.substring(0, 5);
 }
 
 /**
  * Jadwal yang berlaku untuk seorang karyawan pada tanggal tertentu.
- * Baris dengan effectiveDate paling akhir (namun <= tanggal) yang menang.
+ *
+ * Aturannya:
+ *  1. Ada baris untuk tanggal itu  -> pakai baris tersebut (status OFF = diliburkan).
+ *  2. Tidak ada baris, tapi orang ini punya baris lain di bulan yang sama
+ *     -> berarti memang tidak dijadwalkan hari itu (libur).
+ *  3. Orang ini belum punya baris sama sekali -> pakai jam kerja umum dari CONFIG,
+ *     supaya sistem tetap jalan sebelum roster diisi.
  */
 export function resolveSchedule(
   nik: string,
@@ -105,46 +109,59 @@ export function resolveSchedule(
   config: AppConfig
 ): EffectiveSchedule {
   const target = normalizeDateString(date);
+  const mine = (schedules || []).filter((s) => nikEquals(s.nik, nik));
+  const exact = mine.find((s) => normalizeDateString(s.date) === target);
 
-  const candidates = (schedules || [])
-    .filter((s) => nikEquals(s.nik, nik))
-    .filter((s) => String(s.status || 'ACTIVE').toUpperCase() !== 'INACTIVE')
-    .filter((s) => {
-      const eff = normalizeDateString(s.effectiveDate);
-      const end = normalizeDateString(s.endDate || '');
-      if (eff && eff > target) return false;
-      if (end && end < target) return false;
-      return true;
-    })
-    .sort((a, b) => normalizeDateString(b.effectiveDate).localeCompare(normalizeDateString(a.effectiveDate)));
+  const fallbackTolerance = 0;
+  const fallbackOvertime = 30;
 
-  const picked = candidates[0];
-
-  if (!picked) {
+  if (exact) {
+    const off = String(exact.status || 'SCHEDULED').toUpperCase() === 'OFF';
     return {
-      source: 'CONFIG',
-      shiftName: 'Reguler',
-      workDays: [1, 2, 3, 4, 5, 6],
-      startTime: config.workStartTime || '08:00',
-      endTime: config.workEndTime || '17:00',
-      breakMinutes: 60,
-      lateToleranceMinutes: 0,
-      overtimeAfterMinutes: 30,
+      source: off ? 'UNSCHEDULED' : 'ROSTER',
+      shiftName: exact.shiftName || (off ? 'Libur' : 'Shift'),
+      startTime: normalizeTime(exact.startTime) || config.workStartTime || '08:00',
+      endTime: normalizeTime(exact.endTime) || config.workEndTime || '17:00',
+      breakMinutes: Number(exact.breakMinutes) || 0,
+      lateToleranceMinutes:
+        exact.lateToleranceMinutes === undefined || exact.lateToleranceMinutes === null
+          ? fallbackTolerance
+          : Number(exact.lateToleranceMinutes) || 0,
+      overtimeAfterMinutes:
+        exact.overtimeAfterMinutes === undefined || exact.overtimeAfterMinutes === null
+          ? fallbackOvertime
+          : Number(exact.overtimeAfterMinutes) || 0,
+      isWorkDay: !off,
     };
   }
 
+  const monthPrefix = target.substring(0, 7);
+  const hasRosterThisMonth = mine.some((s) => normalizeDateString(s.date).startsWith(monthPrefix));
+
+  if (hasRosterThisMonth) {
+    return {
+      source: 'UNSCHEDULED',
+      shiftName: 'Libur',
+      startTime: config.workStartTime || '08:00',
+      endTime: config.workEndTime || '17:00',
+      breakMinutes: 0,
+      lateToleranceMinutes: fallbackTolerance,
+      overtimeAfterMinutes: fallbackOvertime,
+      isWorkDay: false,
+    };
+  }
+
+  // Belum ada roster untuk orang ini: pakai jam kerja umum, Senin-Sabtu
+  const weekday = new Date(`${target}T00:00:00`).getDay();
   return {
-    source: 'SCHEDULE',
-    shiftName: picked.shiftName || 'Shift',
-    workDays: parseWorkDays(picked.workDays, [1, 2, 3, 4, 5, 6]),
-    startTime: (picked.startTime || config.workStartTime || '08:00').substring(0, 5),
-    endTime: (picked.endTime || config.workEndTime || '17:00').substring(0, 5),
-    breakMinutes: Number(picked.breakMinutes) || 0,
-    lateToleranceMinutes: Number(picked.lateToleranceMinutes) || 0,
-    overtimeAfterMinutes:
-      picked.overtimeAfterMinutes === undefined || picked.overtimeAfterMinutes === null
-        ? 30
-        : Number(picked.overtimeAfterMinutes) || 0,
+    source: 'CONFIG',
+    shiftName: 'Jam Kerja Umum',
+    startTime: config.workStartTime || '08:00',
+    endTime: config.workEndTime || '17:00',
+    breakMinutes: 60,
+    lateToleranceMinutes: fallbackTolerance,
+    overtimeAfterMinutes: fallbackOvertime,
+    isWorkDay: weekday !== 0,
   };
 }
 
@@ -185,8 +202,7 @@ export function computeDayStatus(input: DayStatusInput): DayStatus {
   );
   const leaveApproved = leaveReq && String(leaveReq.status).toUpperCase() === 'APPROVED';
 
-  const weekday = new Date(`${date}T00:00:00`).getDay();
-  const isWorkDay = schedule.workDays.includes(weekday);
+  const isWorkDay = schedule.isWorkDay;
 
   // ---- Lembur ----
   let overtime: OvertimeInfo | null = null;
@@ -255,10 +271,12 @@ export function computeDayStatus(input: DayStatusInput): DayStatus {
 
   const startMin = timeToMinutes(schedule.startTime);
   const inMin = timeToMinutes(inRecord.time);
+
+  // lateMinutes = keterlambatan SEBENARNYA dari jadwal (untuk pelaporan),
+  // sedangkan toleransi hanya menentukan apakah statusnya dihitung terlambat.
   const lateMinutes =
-    !isNaN(startMin) && !isNaN(inMin)
-      ? Math.max(0, inMin - startMin - schedule.lateToleranceMinutes)
-      : 0;
+    !isNaN(startMin) && !isNaN(inMin) ? Math.max(0, inMin - startMin) : 0;
+  const countsAsLate = lateMinutes > schedule.lateToleranceMinutes;
 
   if (!outRecord) {
     if (date < today) {
@@ -281,7 +299,7 @@ export function computeDayStatus(input: DayStatusInput): DayStatus {
     };
   }
 
-  if (lateMinutes > 0) {
+  if (countsAsLate) {
     return {
       code: 'LATE',
       label: `Terlambat ${minutesToLabel(lateMinutes)}`,

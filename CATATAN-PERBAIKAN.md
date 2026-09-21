@@ -353,3 +353,103 @@ R1 hanya melihat barisnya sendiri; R2 melihat timnya; ADMIN melihat semua.
    beserta header dan tiga baris contoh. (Sheet lain yang sudah ada tidak diubah.)
 3. Deploy → Manage deployments → Edit → **New version** → Deploy.
 4. Isi jadwal tiap karyawan lewat menu **Tim Saya → Atur Jadwal**, atau langsung di sheet.
+
+---
+
+# Perubahan kelima — jadwal per tanggal, planner admin, dan unggah Excel
+
+## Model jadwal diubah: roster per tanggal
+
+Sesuai permintaan ("Senin tanggal sekian, plot siapa saja yang masuk dan jam berapa"),
+sheet `SCHEDULE` sekarang **satu baris = satu orang pada satu tanggal**:
+
+| Kolom | Isi | Contoh |
+|---|---|---|
+| Schedule ID | otomatis `SCH-<YYYYMMDD>-<NIK>` | `SCH-20261005-1001` |
+| Date | tanggal jadwal | `2026-10-05` |
+| NIK | karyawan | `1001` |
+| Employee Name | nama | `Andi Pratama` |
+| Shift Name | label shift | `Shift Pagi` |
+| Start Time | jam masuk | `08:00` |
+| End Time | jam pulang | `17:00` |
+| Break Minutes | menit istirahat | `60` |
+| Late Tolerance Minutes | toleransi terlambat | `10` |
+| Overtime After Minutes | lembur dihitung setelah sekian menit lewat jam pulang | `30` |
+| Status | `SCHEDULED` atau `OFF` | `SCHEDULED` |
+| Notes | catatan bebas | |
+
+Cara sistem membaca jadwal seseorang pada suatu tanggal:
+
+1. **Ada baris untuk tanggal itu** → pakai baris tersebut (`OFF` berarti diliburkan).
+2. **Tidak ada barisnya, tapi orang itu punya baris lain di bulan yang sama** → berarti memang
+   tidak dijadwalkan hari itu → **Libur**, bukan Alpha.
+3. **Orang itu belum punya baris sama sekali** → pakai jam kerja umum di sheet CONFIG,
+   Senin–Sabtu. Ini supaya sistem tetap berjalan sebelum roster diisi.
+
+Karena Schedule ID dibentuk dari tanggal + NIK, **mengunggah ulang file yang sama tidak
+menggandakan baris** — baris lama ditimpa.
+
+## Menit keterlambatan kini apa adanya
+
+Sebelumnya angka terlambat sudah dikurangi toleransi (masuk 08:40 dengan toleransi 10 menit
+tampil "Terlambat 30m"). Sekarang yang ditampilkan adalah keterlambatan **sebenarnya**
+(`Terlambat 40m`), sedangkan toleransi hanya menentukan apakah statusnya dihitung terlambat
+atau masih tepat waktu. Angka laporan jadi tidak menyesatkan.
+
+## Tab "Atur Jadwal" — khusus ADMIN
+
+Menu hanya muncul untuk Role Level `ADMIN`, dan komponennya sendiri menolak render untuk role
+lain (jadi tidak bisa ditembus hanya dengan mengubah tab). Isinya dua cara kerja:
+
+**1. Plot harian.** Pilih tanggal → tabel seluruh karyawan aktif dengan centang "Masuk?",
+nama shift, jam masuk, dan jam pulang. Ada aksi cepat: Pilih semua, Kosongkan, **Salin H-1**
+(menyalin plot tanggal sebelumnya), dan "Terapkan jam ke yang terpilih" untuk mengisi jam
+massal. Karyawan yang tidak dicentang disimpan sebagai `OFF`.
+
+**2. Unggah Excel / CSV sebulan.** Unggahan dibaca di browser (SheetJS dimuat dari CDN saat
+dipakai saja), divalidasi, lalu ditampilkan sebagai pratinjau sebelum dikirim:
+
+- NIK yang tidak ada di MANPOWER ditandai merah dan tidak ikut terkirim;
+- tanggal yang tidak terbaca ditandai;
+- baris yang jamnya kosong tanpa status `OFF` dilewati diam-diam (dianggap tidak dijadwalkan);
+- jam dari Excel yang tersimpan sebagai pecahan hari (`0,3333`) otomatis dibaca `08:00`;
+- pengiriman dipecah per 300 baris agar tidak kena batas waktu eksekusi Apps Script.
+
+## Template unggahan
+
+Dua cara, keduanya sudah berisi seluruh karyawan aktif × seluruh tanggal pada bulan terpilih,
+jadi admin tinggal mengisi jam dan menghapus baris yang libur:
+
+- **Tombol "Unduh Template .xlsx"** di aplikasi — file Excel asli.
+- **Tautan dari Apps Script** (sesuai permintaan Anda):
+  `<URL Web App>/exec?action=template&month=2026-10` → mengunduh
+  `Template_Jadwal_2026-10.csv` yang langsung bisa dibuka Excel.
+  Tambahkan `&empty=1` kalau ingin template kosong tanpa daftar karyawan.
+
+## Bonus: bug pada kode GAS yang ditampilkan di aplikasi
+
+Saat mengerjakan ini saya menemukan bug lama: isi `Code.gs` disimpan sebagai *template
+literal* JavaScript, sehingga semua `\d` pada regex tanggal **hilang backslash-nya** ketika
+ditampilkan di menu GAS Code (`/^\d{4}/` menjadi `/^d{4}/`). Siapa pun yang menyalin kode dari
+dalam aplikasi akan mendapat regex rusak dan pencocokan tanggal gagal. File `.gs` yang saya
+kirim lewat chat tidak terkena karena diekstrak mentah.
+
+Sudah diperbaiki: seluruh backslash di template di-escape, dan proses ekstraksi file `.gs`
+sekarang benar-benar mengevaluasi template literal itu lalu memverifikasi hasilnya
+(`\d{4}` utuh, tidak ada karakter tak terlihat, aksi baru tersedia). Jadi kode di aplikasi dan
+file `.gs` kini identik dan sama-sama benar.
+
+## Pengujian
+
+Mesin jadwal & status diuji otomatis (20 kasus, semuanya lulus): pembacaan jam dari Excel,
+roster ditemukan/tidak, status OFF, tanggal tak di-plot, fallback CONFIG, NIK dengan nol di
+depan, toleransi terlambat, belum clock out hari ini vs hari lalu, alpha, libur, cuti, serta
+tiga keadaan lembur (belum diajukan / pending / disetujui).
+
+## Deploy
+
+1. Salin ulang `Code.gs` dan `SetupSheets.gs` dari folder `apps-script/`.
+2. **Hapus sheet `SCHEDULE` lama** kalau sudah terlanjur dibuat dengan format sebelumnya
+   (kolomnya berbeda), lalu jalankan `initializeRetailAttendanceSheets()` sekali.
+3. Deploy → Manage deployments → Edit → **New version** → Deploy.
+4. Buka menu **Atur Jadwal** (login sebagai ADMIN) untuk mulai plot atau mengunggah Excel.

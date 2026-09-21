@@ -269,18 +269,17 @@ export async function fetchLiveSchedules(spreadsheetId: string): Promise<Schedul
 
       list.push({
         scheduleId: id,
-        nik: String(row[1] || '').trim(),
-        employeeName: String(row[2] || '').trim(),
-        shiftName: String(row[3] || '').trim(),
-        workDays: String(row[4] || '').trim(),
+        date: normalizeDateString(row[1]),
+        nik: String(row[2] || '').trim(),
+        employeeName: String(row[3] || '').trim(),
+        shiftName: String(row[4] || '').trim(),
         startTime: String(row[5] || '').trim(),
         endTime: String(row[6] || '').trim(),
         breakMinutes: parseCoordinate(row[7], 60),
         lateToleranceMinutes: parseCoordinate(row[8], 0),
         overtimeAfterMinutes: parseCoordinate(row[9], 30),
-        effectiveDate: normalizeDateString(row[10]),
-        endDate: normalizeDateString(row[11]),
-        status: String(row[12] || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+        status: String(row[10] || '').toUpperCase() === 'OFF' ? 'OFF' : 'SCHEDULED',
+        notes: String(row[11] || '').trim(),
       });
     }
     return list;
@@ -419,18 +418,17 @@ export async function fetchAllDataViaGas(gasUrl: string): Promise<{
 
     const schedules: ScheduleRecord[] = (d.schedules || []).map((r: any) => ({
       scheduleId: String(r.scheduleId || ''),
+      date: normalizeDateString(r.date),
       nik: String(r.nik || '').trim(),
       employeeName: String(r.employeeName || ''),
       shiftName: String(r.shiftName || ''),
-      workDays: String(r.workDays || ''),
       startTime: String(r.startTime || ''),
       endTime: String(r.endTime || ''),
       breakMinutes: parseCoordinate(r.breakMinutes, 60),
       lateToleranceMinutes: parseCoordinate(r.lateToleranceMinutes, 0),
       overtimeAfterMinutes: parseCoordinate(r.overtimeAfterMinutes, 30),
-      effectiveDate: normalizeDateString(r.effectiveDate),
-      endDate: normalizeDateString(r.endDate),
-      status: String(r.status || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+      status: String(r.status || '').toUpperCase() === 'OFF' ? 'OFF' : 'SCHEDULED',
+      notes: String(r.notes || ''),
     }));
 
     return {
@@ -465,6 +463,38 @@ export async function fetchTodayStatusViaGas(
     inTime: res.data.inTime || undefined,
     outTime: res.data.outTime || undefined,
   };
+}
+
+/**
+ * Kirim banyak baris jadwal sekaligus ke sheet SCHEDULE.
+ * Dipecah per 300 baris supaya tidak melewati batas eksekusi Apps Script.
+ */
+export async function saveScheduleBatchViaGas(
+  gasUrl: string,
+  rows: ScheduleRecord[],
+  onProgress?: (done: number, total: number) => void
+): Promise<{ success: boolean; message: string; saved: number }> {
+  if (!gasUrl) return { success: false, message: 'Apps Script belum terhubung.', saved: 0 };
+  if (!rows || rows.length === 0) return { success: false, message: 'Tidak ada baris untuk disimpan.', saved: 0 };
+
+  const CHUNK = 300;
+  let saved = 0;
+
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const res = await sendGasAction(gasUrl, 'saveScheduleBatch', { rows: chunk });
+    if (!res.success) {
+      return {
+        success: false,
+        message: `${res.message} (berhenti setelah ${saved} baris tersimpan)`,
+        saved,
+      };
+    }
+    saved += chunk.length;
+    if (onProgress) onProgress(Math.min(saved, rows.length), rows.length);
+  }
+
+  return { success: true, message: `${saved} baris jadwal tersimpan.`, saved };
 }
 
 /**

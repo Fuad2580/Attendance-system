@@ -23,6 +23,16 @@ function doPost(e) {
 }
 
 function handleRequest(e) {
+  // Unduhan template jadwal dikembalikan sebagai file CSV, bukan JSON.
+  try {
+    var earlyAction = (e && e.parameter && e.parameter.action) || '';
+    if (earlyAction === 'template') {
+      return Schedule_templateFile(e.parameter || {});
+    }
+  } catch (tplErr) {
+    // lanjut ke penanganan normal
+  }
+
   const output = ContentService.createTextOutput();
   output.setMimeType(ContentService.MimeType.JSON);
 
@@ -62,6 +72,9 @@ function handleRequest(e) {
         break;
       case 'saveSchedule':
         result = Schedule_save(params);
+        break;
+      case 'saveScheduleBatch':
+        result = Schedule_saveBatch(params);
         break;
       case 'registerFace':
         result = Face_register(params);
@@ -453,73 +466,221 @@ function Attendance_clockOut(payload) {
   }
 }
 
-/**
- * Simpan / perbarui satu baris jadwal di sheet SCHEDULE.
- * Baris dikenali dari Schedule ID; kalau belum ada, ditambahkan.
- */
+var SCHEDULE_HEADERS = ['Schedule ID', 'Date', 'NIK', 'Employee Name', 'Shift Name', 'Start Time', 'End Time', 'Break Minutes', 'Late Tolerance Minutes', 'Overtime After Minutes', 'Status', 'Notes'];
+
+function Schedule_sheet() {
+  const ss = getSpreadsheet();
+  let sheet = ss.getSheetByName('SCHEDULE');
+  if (!sheet) {
+    sheet = ss.insertSheet('SCHEDULE');
+    sheet.appendRow(SCHEDULE_HEADERS);
+    sheet.getRange(1, 1, 1, SCHEDULE_HEADERS.length).setFontWeight('bold').setBackground('#E2E8F0');
+    sheet.getRange('B2:C').setNumberFormat('@');
+    sheet.getRange('F2:G').setNumberFormat('@');
+  }
+  return sheet;
+}
+
+/** "2026-10-05", Date, atau "05/10/2026" -> "2026-10-05" */
+function Schedule_normalizeDate(val) {
+  return normalizeGasDate(val);
+}
+
+/** "8:0" / 0.333 (nilai waktu Excel) / Date -> "08:00" */
+function Schedule_normalizeTime(val) {
+  if (val === null || val === undefined || val === '') return '';
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, 'Asia/Jakarta', 'HH:mm');
+  }
+  if (typeof val === 'number' && val > 0 && val < 1) {
+    var total = Math.round(val * 24 * 60);
+    return ('0' + Math.floor(total / 60)).slice(-2) + ':' + ('0' + (total % 60)).slice(-2);
+  }
+  var s = String(val).trim();
+  var m = s.match(/^(\d{1,2})[:.\s]?(\d{2})/);
+  if (m) {
+    return ('0' + Math.min(23, parseInt(m[1], 10))).slice(-2) + ':' + ('0' + Math.min(59, parseInt(m[2], 10))).slice(-2);
+  }
+  return s.substring(0, 5);
+}
+
+function Schedule_buildRow(item) {
+  const date = Schedule_normalizeDate(item.date);
+  const nik = nikToText(item.nik);
+  const id = item.scheduleId || ('SCH-' + date.replace(/-/g, '') + '-' + nik);
+  return [
+    id,
+    date,
+    nik,
+    item.employeeName || '',
+    item.shiftName || 'Shift',
+    Schedule_normalizeTime(item.startTime) || '08:00',
+    Schedule_normalizeTime(item.endTime) || '17:00',
+    item.breakMinutes === undefined || item.breakMinutes === '' ? 60 : Number(item.breakMinutes) || 0,
+    item.lateToleranceMinutes === undefined || item.lateToleranceMinutes === '' ? 0 : Number(item.lateToleranceMinutes) || 0,
+    item.overtimeAfterMinutes === undefined || item.overtimeAfterMinutes === '' ? 30 : Number(item.overtimeAfterMinutes) || 0,
+    String(item.status || 'SCHEDULED').toUpperCase() === 'OFF' ? 'OFF' : 'SCHEDULED',
+    item.notes || ''
+  ];
+}
+
+/** Simpan satu baris jadwal (satu orang, satu tanggal). */
 function Schedule_save(payload) {
+  return Schedule_saveBatch({ rows: [payload] });
+}
+
+/**
+ * Simpan banyak baris jadwal sekaligus.
+ * Baris dengan Schedule ID yang sama DITIMPA, jadi mengunggah ulang file yang sama
+ * tidak menghasilkan duplikat.
+ */
+function Schedule_saveBatch(payload) {
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(15000);
-    const ss = getSpreadsheet();
-    let sheet = ss.getSheetByName('SCHEDULE');
+    lock.waitLock(25000);
+    const rows = payload && payload.rows ? payload.rows : [];
+    if (!rows.length) return { success: false, message: 'Tidak ada baris jadwal yang dikirim.' };
 
-    if (!sheet) {
-      sheet = ss.insertSheet('SCHEDULE');
-      sheet.appendRow(['Schedule ID', 'NIK', 'Employee Name', 'Shift Name', 'Work Days', 'Start Time', 'End Time', 'Break Minutes', 'Late Tolerance Minutes', 'Overtime After Minutes', 'Effective Date', 'End Date', 'Status']);
-      sheet.getRange(1, 1, 1, 13).setFontWeight('bold').setBackground('#E2E8F0');
+    const sheet = Schedule_sheet();
+    const data = sheet.getDataRange().getValues();
+
+    // Peta Schedule ID -> nomor baris
+    const index = {};
+    for (let i = 1; i < data.length; i++) {
+      const key = String(data[i][0]).trim();
+      if (key) index[key] = i + 1;
     }
 
-    if (!payload.nik) return { success: false, message: 'NIK wajib diisi.' };
+    const appended = [];
+    let updated = 0;
+    let skipped = 0;
 
-    const scheduleId = payload.scheduleId || ('SCH-' + nikToText(payload.nik) + '-' + String(payload.effectiveDate || '').replace(/-/g, ''));
+    for (let r = 0; r < rows.length; r++) {
+      const item = rows[r];
+      if (!item || !item.nik || !item.date) {
+        skipped++;
+        continue;
+      }
+      const row = Schedule_buildRow(item);
+      const existingRow = index[String(row[0]).trim()];
 
-    const row = [
-      scheduleId,
-      nikToText(payload.nik),
-      payload.employeeName || '',
-      payload.shiftName || 'Shift',
-      payload.workDays || '1,2,3,4,5,6',
-      String(payload.startTime || '08:00'),
-      String(payload.endTime || '17:00'),
-      payload.breakMinutes === undefined ? 60 : Number(payload.breakMinutes),
-      payload.lateToleranceMinutes === undefined ? 0 : Number(payload.lateToleranceMinutes),
-      payload.overtimeAfterMinutes === undefined ? 30 : Number(payload.overtimeAfterMinutes),
-      String(payload.effectiveDate || ''),
-      String(payload.endDate || ''),
-      String(payload.status || 'ACTIVE').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE'
-    ];
-
-    const data = sheet.getDataRange().getValues();
-    let targetRow = 0;
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]).trim() === String(scheduleId).trim()) {
-        targetRow = i + 1;
-        break;
+      if (existingRow) {
+        sheet.getRange(existingRow, 1, 1, row.length).setValues([row]);
+        sheet.getRange(existingRow, 2, 1, 2).setNumberFormat('@').setValues([[row[1], row[2]]]);
+        sheet.getRange(existingRow, 6, 1, 2).setNumberFormat('@').setValues([[row[5], row[6]]]);
+        updated++;
+      } else {
+        appended.push(row);
       }
     }
 
-    if (targetRow > 0) {
-      sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
-    } else {
-      sheet.appendRow(row);
-      targetRow = sheet.getLastRow();
+    if (appended.length > 0) {
+      const startRow = sheet.getLastRow() + 1;
+      sheet.getRange(startRow, 1, appended.length, SCHEDULE_HEADERS.length).setValues(appended);
+      sheet.getRange(startRow, 2, appended.length, 2).setNumberFormat('@');
+      sheet.getRange(startRow, 6, appended.length, 2).setNumberFormat('@');
+      // Tulis ulang kolom teks agar tanggal & jam tidak dikonversi Google Sheets
+      const dateNik = appended.map(function (x) { return [x[1], x[2]]; });
+      const times = appended.map(function (x) { return [x[5], x[6]]; });
+      sheet.getRange(startRow, 2, appended.length, 2).setValues(dateNik);
+      sheet.getRange(startRow, 6, appended.length, 2).setValues(times);
     }
 
-    // Jam & tanggal dipaksa teks agar tidak dikonversi Google Sheets
-    sheet.getRange(targetRow, 2).setNumberFormat('@').setValue(nikToText(payload.nik));
-    sheet.getRange(targetRow, 6, 1, 2).setNumberFormat('@').setValues([[row[5], row[6]]]);
-    sheet.getRange(targetRow, 11, 1, 2).setNumberFormat('@').setValues([[row[10], row[11]]]);
     SpreadsheetApp.flush();
 
-    Audit_log(payload.nik, payload.employeeName, 'Schedule Update', scheduleId, '-', row[5] + '-' + row[6] + ' (' + row[4] + ')', 0, 0, 'Jadwal kerja disimpan ke sheet SCHEDULE');
+    Audit_log(
+      payload.actorNik || 'ADMIN',
+      payload.actorName || 'Administrator',
+      'Schedule Batch Update',
+      'SCHEDULE',
+      '-',
+      (updated + appended.length) + ' baris',
+      0,
+      0,
+      'Jadwal disimpan: ' + appended.length + ' baru, ' + updated + ' diperbarui, ' + skipped + ' dilewati.'
+    );
 
-    return { success: true, message: 'Jadwal tersimpan.', scheduleId: scheduleId };
+    return {
+      success: true,
+      message: 'Jadwal tersimpan: ' + appended.length + ' baru, ' + updated + ' diperbarui' + (skipped ? ', ' + skipped + ' dilewati' : '') + '.',
+      data: { inserted: appended.length, updated: updated, skipped: skipped }
+    };
   } catch (err) {
     return { success: false, message: 'Gagal menyimpan jadwal: ' + err.toString() };
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * TEMPLATE UNGGAH JADWAL.
+ *
+ * Buka di browser:  <URL Web App>/exec?action=template&month=2026-10
+ * File CSV (bisa langsung dibuka Excel) akan terunduh, sudah berisi seluruh karyawan
+ * ACTIVE dikali seluruh tanggal pada bulan tersebut, sehingga admin tinggal mengisi
+ * jam masuk / jam pulang dan menghapus baris orang yang libur.
+ *
+ * Tambahkan &empty=1 kalau ingin template kosong (hanya baris header + 1 contoh).
+ */
+function Schedule_templateFile(params) {
+  const tz = 'Asia/Jakarta';
+  let month = String(params.month || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    month = Utilities.formatDate(new Date(), tz, 'yyyy-MM');
+  }
+
+  const lines = [];
+  lines.push(SCHEDULE_HEADERS.join(','));
+
+  const csvCell = function (v) {
+    const s = String(v === null || v === undefined ? '' : v);
+    return (s.indexOf(',') >= 0 || s.indexOf('"') >= 0) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+
+  if (String(params.empty || '') === '1') {
+    lines.push(['', month + '-01', '1001', 'Contoh Karyawan', 'Shift Pagi', '08:00', '17:00', 60, 10, 30, 'SCHEDULED', ''].map(csvCell).join(','));
+  } else {
+    const ss = getSpreadsheet();
+    const manSheet = ss.getSheetByName('MANPOWER');
+    const manData = manSheet ? manSheet.getDataRange().getValues() : [];
+
+    const year = parseInt(month.substring(0, 4), 10);
+    const mon = parseInt(month.substring(5, 7), 10);
+    const daysInMonth = new Date(year, mon, 0).getDate();
+
+    for (let i = 1; i < manData.length; i++) {
+      const nik = nikToText(manData[i][0]);
+      if (!nik) continue;
+      const status = String(manData[i][10] || 'ACTIVE').toUpperCase();
+      if (status === 'INACTIVE') continue;
+      const name = String(manData[i][1] || '');
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = month + '-' + ('0' + d).slice(-2);
+        lines.push([
+          'SCH-' + date.replace(/-/g, '') + '-' + nik,
+          date,
+          nik,
+          name,
+          '',
+          '',
+          '',
+          60,
+          10,
+          30,
+          'SCHEDULED',
+          ''
+        ].map(csvCell).join(','));
+      }
+    }
+  }
+
+  // BOM supaya Excel membaca UTF-8 dengan benar
+  const csv = String.fromCharCode(0xFEFF) + lines.join('\n');
+
+  return ContentService.createTextOutput(csv)
+    .setMimeType(ContentService.MimeType.CSV)
+    .downloadAsFile('Template_Jadwal_' + month + '.csv');
 }
 
 /**
@@ -842,9 +1003,8 @@ function Data_getAll() {
           'nik', 'employeeName', 'faceTemplate', 'registeredAt', 'updatedAt', 'status'
         ]),
         schedules: Sheet_toObjects('SCHEDULE', [
-          'scheduleId', 'nik', 'employeeName', 'shiftName', 'workDays', 'startTime', 'endTime',
-          'breakMinutes', 'lateToleranceMinutes', 'overtimeAfterMinutes', 'effectiveDate',
-          'endDate', 'status'
+          'scheduleId', 'date', 'nik', 'employeeName', 'shiftName', 'startTime', 'endTime',
+          'breakMinutes', 'lateToleranceMinutes', 'overtimeAfterMinutes', 'status', 'notes'
         ]),
         config: Config_getAll().data || {},
         timestamp: new Date().toISOString()
