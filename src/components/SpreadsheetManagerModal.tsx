@@ -381,22 +381,26 @@ export const SpreadsheetManagerModal: React.FC<SpreadsheetManagerModalProps> = (
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Face Match Threshold (Cosine Similarity)
+                      Face Match Max Distance (semakin kecil = semakin ketat)
                     </label>
                     <input
                       type="number"
-                      step="0.05"
-                      min="0.4"
-                      max="0.99"
-                      value={localConfig.faceMatchThreshold}
+                      step="0.01"
+                      min="0.30"
+                      max="0.60"
+                      value={localConfig.faceMaxDistance ?? 0.45}
                       onChange={(e) =>
                         setLocalConfig({
                           ...localConfig,
-                          faceMatchThreshold: Number(e.target.value),
+                          faceMaxDistance: Number(e.target.value),
                         })
                       }
                       className="w-32 p-2 border border-slate-300 rounded-xl bg-white text-xs font-bold"
                     />
+                    <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                      Jarak Euclidean descriptor wajah 128-dimensi. Orang yang sama biasanya 0.20-0.45,
+                      orang berbeda 0.60-1.10. Rekomendasi: <strong>0.45</strong> (ketat: 0.38).
+                    </p>
                   </div>
                 </div>
 

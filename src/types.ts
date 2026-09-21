@@ -22,7 +22,10 @@ export interface AppConfig {
   attendanceRetentionDays: number;
   allowFaceRegistration: boolean;
   requireFaceRecognition: boolean;
+  /** @deprecated dipakai oleh biometrik versi lama (cosine similarity). */
   faceMatchThreshold: number;
+  /** Ambang jarak Euclidean face recognition (0.35 = sangat ketat, 0.5 = longgar). */
+  faceMaxDistance: number;
   faceConsentRequired: boolean;
   allowClockIn: boolean;
   allowClockOut: boolean;

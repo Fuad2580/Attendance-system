@@ -22,7 +22,13 @@ import {
   DEFAULT_AUDIT_LOGS,
 } from '../data/defaultData';
 import { findNearestLocation } from '../utils/geo';
-import { getLocalTodayDate, isDateToday, normalizeDateString } from '../utils/dateUtils';
+import {
+  getLocalTodayDate,
+  getJakartaTodayDate,
+  getJakartaTimeString,
+  isDateToday,
+  normalizeDateString,
+} from '../utils/dateUtils';
 import { DEFAULT_SPREADSHEET_URL, DEFAULT_SPREADSHEET_ID } from '../utils/gasExporter';
 import { DEFAULT_GAS_URL } from '../config/gasConfig';
 import {
@@ -32,6 +38,8 @@ import {
   fetchLiveRequests,
   fetchLiveConfig,
   fetchLiveFaceRegisters,
+  fetchAllDataViaGas,
+  fetchTodayStatusViaGas,
   sendGasAction,
 } from '../services/sheetSyncService';
 
@@ -272,7 +280,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!spreadsheetId) return;
     try {
       setIsLiveSyncing(true);
-      const [liveAtt, liveReq, liveMan, liveLoc, liveCfg, liveFaces] = await Promise.all([
+      let [liveAtt, liveReq, liveMan, liveLoc, liveCfg, liveFaces] = await Promise.all([
         fetchLiveAttendance(spreadsheetId),
         fetchLiveRequests(spreadsheetId),
         fetchLiveManpower(spreadsheetId),
@@ -280,6 +288,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetchLiveConfig(spreadsheetId),
         fetchLiveFaceRegisters(spreadsheetId),
       ]);
+
+      // The gviz endpoint above only works when the spreadsheet is shared publicly.
+      // When it returns nothing, read the very same sheets through the Apps Script Web App,
+      // which is authenticated and always authoritative.
+      const activeGasUrl = liveCfg?.gasUrl || gasUrl;
+      const gvizLooksEmpty =
+        (!liveMan || liveMan.length === 0) || (!liveAtt || liveAtt.length === 0);
+
+      if (gvizLooksEmpty && activeGasUrl) {
+        const viaGas = await fetchAllDataViaGas(activeGasUrl);
+        if (viaGas) {
+          if (viaGas.attendance.length > 0 || !liveAtt || liveAtt.length === 0) liveAtt = viaGas.attendance;
+          if (viaGas.manpower.length > 0) liveMan = viaGas.manpower;
+          if (viaGas.locations.length > 0) liveLoc = viaGas.locations;
+          if (viaGas.requests.length > 0) liveReq = viaGas.requests;
+          if (viaGas.faceRegisters.length > 0) liveFaces = viaGas.faceRegisters;
+        }
+      }
 
       if (liveCfg?.gasUrl) {
         setGasUrl(liveCfg.gasUrl);
@@ -332,7 +358,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } finally {
       setIsLiveSyncing(false);
     }
-  }, [spreadsheetId]);
+  }, [spreadsheetId, gasUrl]);
 
   // Automated background polling every 10s and on tab focus
   useEffect(() => {
@@ -534,19 +560,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Attendance Actions
+  //
+  // Aturan utama: GOOGLE SHEETS ADALAH SATU-SATUNYA SUMBER KEBENARAN.
+  // UI tidak boleh pernah melaporkan "berhasil" kalau baris belum benar-benar masuk ke sheet.
   const clockIn = async (options?: { faceVerified?: boolean }) => {
     if (!currentUser) return { success: false, message: 'User is not logged in.' };
     if (!config.allowClockIn) return { success: false, message: 'Clock In is currently disabled by administrator.' };
 
-    const todayStr = getLocalTodayDate();
-    const nowTimeStr = new Date().toTimeString().split(' ')[0];
+    // Tanggal & jam mengikuti WIB (Asia/Jakarta) agar identik dengan yang dipakai Apps Script,
+    // meskipun jam/timezone HP karyawan berbeda.
+    const todayStr = getJakartaTodayDate();
+    const nowTimeStr = getJakartaTimeString();
 
     // Check if user already clocked in today (supports multiple date formats & timezones)
     const existingIn = attendance.find(
       (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
     );
     if (existingIn) {
-      return { success: false, message: `You have already clocked in today at ${existingIn.time}.` };
+      return { success: false, message: `Anda sudah Clock In hari ini pukul ${existingIn.time}.` };
     }
 
     // Geolocation Validation
@@ -556,8 +587,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!isFlexible && !isWithinRadius) {
       const msg = `Clock In gagal. Anda berada ${geoStatus.distance} meter dari lokasi terdekat (${nearestLoc ? nearestLoc.locationName : 'Unknown'}). Maksimum radius adalah ${geoStatus.allowedRadius} meter.`;
-      
-      // Save failed attempt to AUDIT_LOG as mandated by rule #6
+
       addAuditLog({
         nik: currentUser.nik,
         user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
@@ -582,7 +612,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newValue: 'FAILED',
         description: 'Clock In halted: Face biometric verification failed or skipped.',
       });
-      return { success: false, message: 'Face verification failed. Facial biometrics are required to clock in.' };
+      return { success: false, message: 'Verifikasi wajah gagal. Clock In dibatalkan.' };
     }
 
     // Find Homebase Name
@@ -624,7 +654,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // Optimistically update local attendance state so Clock Out and UI are immediately available
+    // Baris sudah benar-benar masuk sheet -> baru perbarui state lokal
     setAttendance((prev) => [newRecord, ...prev.filter((a) => a.attendanceId !== newRecord.attendanceId)]);
     localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([newRecord, ...attendance.filter((a) => a.attendanceId !== newRecord.attendanceId)]));
 
@@ -648,37 +678,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentUser) return { success: false, message: 'User is not logged in.' };
     if (!config.allowClockOut) return { success: false, message: 'Clock Out is currently disabled by administrator.' };
 
-    const todayStr = getLocalTodayDate();
-    const nowTimeStr = new Date().toTimeString().split(' ')[0];
+    const todayStr = getJakartaTodayDate();
+    const nowTimeStr = getJakartaTimeString();
 
-    // Business rule: User cannot clock out if there is no valid clock in (with robust date normalization)
-    let existingIn = attendance.find(
-      (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
-    );
-    if (!existingIn) {
-      // Secondary check from localStorage in case of transient state desync
-      try {
-        const stored = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-        if (stored) {
-          const parsed: AttendanceRecord[] = JSON.parse(stored);
-          existingIn = parsed.find(
-            (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'IN'
-          );
-        }
-      } catch (e) {
-        // ignore
-      }
+    if (!gasUrl) {
+      return {
+        success: false,
+        message: '⚠️ Perangkat ini belum terhubung ke Google Apps Script. Buka menu GAS Code di atas untuk menghubungkan Web App URL agar Clock Out langsung tercatat di Google Sheets.',
+      };
     }
-    if (!existingIn) {
+
+    // Status Clock In/Out ditanyakan langsung ke Google Sheets lewat Apps Script.
+    // State lokal TIDAK dipakai sebagai penghalang, karena cache lokal bisa kosong
+    // (mis. halaman baru dibuka, atau sheet tidak dibagikan publik sehingga pembacaan gviz kosong)
+    // dan itulah yang dulu membuat Clock Out berhenti sebelum sempat dikirim ke spreadsheet.
+    const serverStatus = await fetchTodayStatusViaGas(gasUrl, currentUser.nik);
+
+    if (serverStatus && !serverStatus.hasClockedIn) {
       return { success: false, message: 'Clock Out gagal. Anda belum melakukan Clock In hari ini.' };
     }
-
-    // Business rule: User cannot clock out twice
-    const existingOut = attendance.find(
-      (a) => a.nik === currentUser.nik && isDateToday(a.date) && a.type === 'OUT'
-    );
-    if (existingOut) {
-      return { success: false, message: `You have already clocked out today at ${existingOut.time}.` };
+    if (serverStatus && serverStatus.hasClockedOut) {
+      return {
+        success: false,
+        message: `Anda sudah melakukan Clock Out hari ini pukul ${serverStatus.outTime || '-'}.`,
+      };
     }
 
     // Biometric Validation
@@ -702,7 +725,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!isFlexible && !isWithinRadius) {
       const msg = `Clock Out gagal. Anda berada ${geoStatus.distance} meter dari lokasi terdekat. Maksimum radius adalah ${geoStatus.allowedRadius} meter.`;
-      
+
       addAuditLog({
         nik: currentUser.nik,
         user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
@@ -739,43 +762,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
 
-    if (!gasUrl) {
-      return {
-        success: false,
-        message: '⚠️ Perangkat ini belum terhubung ke Google Apps Script. Buka menu GAS Code di atas untuk menghubungkan Web App URL agar Clock Out langsung tercatat di Google Sheets.',
-      };
-    }
-
     const res = await sendGasAction(gasUrl, 'clockOut', newRecord);
+
     if (!res.success) {
-      if (res.message && res.message.toLowerCase().includes('belum melakukan clock in')) {
-        // Optimistically record Clock Out locally so user is not blocked from completing shift
-        setAttendance((prev) => [newRecord, ...prev.filter((a) => a.attendanceId !== newRecord.attendanceId)]);
-        localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([newRecord, ...attendance.filter((a) => a.attendanceId !== newRecord.attendanceId)]));
-
-        addAuditLog({
-          nik: currentUser.nik,
-          user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
-          action: 'Clock Out (Local)',
-          referenceId: newRecord.attendanceId,
-          oldValue: 'CLOCKED IN',
-          newValue: `CLOCKED OUT ${nowTimeStr}`,
-          description: `Clock Out recorded locally. Google Sheets Apps Script needs updated code for date matching.`,
-        });
-
-        return {
-          success: true,
-          message: `Clock Out berhasil disimpan! (Catatan: Salin kode terbaru dari menu GAS Code di atas agar Google Apps Script mengenali format tanggal otomatis)`,
-        };
-      }
+      // TIDAK ADA LAGI "berhasil palsu". Kalau spreadsheet menolak, user harus tahu.
+      addAuditLog({
+        nik: currentUser.nik,
+        user: `${currentUser.employeeName} (${currentUser.roleLevel})`,
+        action: 'Failed Clock Out',
+        referenceId: newRecord.attendanceId,
+        oldValue: 'CLOCKED IN',
+        newValue: 'WRITE_REJECTED',
+        description: `Apps Script menolak Clock Out: ${res.message}`,
+      });
 
       return {
         success: false,
-        message: `Gagal mencatat Clock Out ke Spreadsheet: ${res.message}. Pastikan deployment Apps Script diset ke 'Anyone'.`,
+        message: `Clock Out BELUM tercatat di Spreadsheet: ${res.message}. Pastikan Apps Script sudah di-deploy ulang dengan kode terbaru (menu GAS Code) dan akses "Anyone".`,
       };
     }
 
-    // Optimistically update local attendance state so UI reflects Clock Out immediately
+    // Baris sudah benar-benar masuk sheet -> baru perbarui state lokal
     setAttendance((prev) => [newRecord, ...prev.filter((a) => a.attendanceId !== newRecord.attendanceId)]);
     localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([newRecord, ...attendance.filter((a) => a.attendanceId !== newRecord.attendanceId)]));
 
@@ -798,6 +805,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const registerFaceTemplate = async (nik: string, templateJson: string) => {
     const emp = manpower.find((m) => m.nik === nik);
     if (!emp) return { success: false, message: 'Employee not found.' };
+
+    if (!gasUrl) {
+      return {
+        success: false,
+        message:
+          '⚠️ Perangkat ini belum terhubung ke Google Apps Script, sehingga template wajah tidak bisa disimpan. Hubungkan Web App URL lewat menu GAS Code lalu ulangi registrasi.',
+      };
+    }
+
+    // Template HARUS tersimpan di Google Sheets dulu. Kalau hanya tersimpan di perangkat,
+    // karyawan tampak "sudah terdaftar" padahal di HP/laptop lain tidak ada templatenya.
+    const gasRes = await sendGasAction(gasUrl, 'registerFace', {
+      nik,
+      employeeName: emp.employeeName,
+      faceTemplate: templateJson,
+    });
+
+    if (!gasRes.success) {
+      return {
+        success: false,
+        message: `Registrasi wajah GAGAL disimpan ke Google Sheets: ${gasRes.message}. Ulangi setelah Apps Script di-deploy ulang.`,
+      };
+    }
 
     const now = new Date().toISOString();
     const existingIndex = faceRegisters.findIndex((f) => f.nik === nik);
@@ -831,31 +861,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       referenceId: nik,
       oldValue: emp.faceRegistered ? 'TEMPLATE_REGISTERED' : 'UNREGISTERED',
       newValue: 'TEMPLATE_ACTIVE',
-      description: 'Biometric face embedding vector registered locally on device',
+      description: 'Face descriptor 128-d tersimpan di sheet FACE_REGISTER',
     });
 
-    if (gasUrl) {
-      const gasRes = await sendGasAction(gasUrl, 'registerFace', {
-        nik,
-        employeeName: emp.employeeName,
-        faceTemplate: templateJson,
-      });
+    setTimeout(() => syncFromSpreadsheet(), 1200);
 
-      if (gasRes.success) {
-        setTimeout(() => syncFromSpreadsheet(), 1200);
-        return { success: true, message: 'Data biometrik wajah berhasil dicatat ke Google Spreadsheet!' };
-      } else {
-        return {
-          success: true,
-          message: `Biometrik wajah tersimpan di perangkat! (Catatan: Sync ke Google Sheets gagal: ${gasRes.message})`,
-        };
-      }
-    }
-
-    return {
-      success: true,
-      message: 'Data biometrik wajah berhasil disimpan di perangkat!',
-    };
+    return { success: true, message: 'Data biometrik wajah berhasil dicatat ke Google Spreadsheet!' };
   };
 
   // Request & Approval

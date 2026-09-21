@@ -11,7 +11,12 @@ import {
   Sparkles,
   Lock,
 } from 'lucide-react';
-import { extractFaceEmbeddingFromVideo, zeroMeanUnitNormalize } from '../utils/faceBiometrics';
+import {
+  captureFaceDescriptor,
+  buildFaceTemplate,
+  maxPairwiseDistance,
+  loadFaceEngine,
+} from '../utils/faceBiometrics';
 
 interface FaceRegistrationModalProps {
   onClose: () => void;
@@ -29,6 +34,8 @@ export const FaceRegistrationModal: React.FC<FaceRegistrationModalProps> = ({ on
   const [capturedFramesCount, setCapturedFramesCount] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [engineStatus, setEngineStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [progressText, setProgressText] = useState<string>('');
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -52,6 +59,12 @@ export const FaceRegistrationModal: React.FC<FaceRegistrationModalProps> = ({ on
         }
       }
       startCamera();
+      loadFaceEngine()
+        .then(() => setEngineStatus('ready'))
+        .catch((err: any) => {
+          setEngineStatus('error');
+          setErrorMessage(err?.message || 'Mesin pengenalan wajah gagal dimuat. Periksa koneksi internet.');
+        });
     }
 
     return () => {
@@ -65,38 +78,54 @@ export const FaceRegistrationModal: React.FC<FaceRegistrationModalProps> = ({ on
     if (!currentUser) return;
     setIsProcessing(true);
     setErrorMessage(null);
+    setCapturedFramesCount(0);
 
-    const vectors: number[][] = [];
-
-    // Multi-frame accumulation animation and feature extraction
-    for (let i = 1; i <= 4; i++) {
-      setCapturedFramesCount(i);
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      if (videoRef.current && cameraStream) {
-        vectors.push(extractFaceEmbeddingFromVideo(videoRef.current));
-      }
-    }
-
-    if (vectors.length === 0) {
+    if (!videoRef.current || !cameraStream) {
       setIsProcessing(false);
-      setErrorMessage('Kamera tidak terdeteksi atau tidak aktif. Harap izinkan akses kamera untuk merekam wajah Anda.');
+      setErrorMessage('Kamera tidak aktif. Izinkan akses kamera untuk merekam wajah Anda.');
       return;
     }
 
-    // Average collected vectors to produce a clean, stable biometric template
-    const vectorLength = vectors[0].length;
-    const avgVector: number[] = new Array(vectorLength).fill(0);
-    for (const vec of vectors) {
-      for (let i = 0; i < vectorLength; i++) {
-        avgVector[i] += vec[i];
-      }
-    }
-    const finalVector = zeroMeanUnitNormalize(avgVector);
+    const TOTAL_SAMPLES = 5;
+    const samples: number[][] = [];
 
-    const vectorJson = JSON.stringify(finalVector);
-    const res = await registerFaceTemplate(currentUser.nik, vectorJson);
+    for (let i = 1; i <= TOTAL_SAMPLES; i++) {
+      setProgressText(`Merekam sampel wajah ${i} dari ${TOTAL_SAMPLES}...`);
+      const capture = await captureFaceDescriptor(videoRef.current);
+
+      if (!capture.ok || !capture.descriptor) {
+        setIsProcessing(false);
+        setProgressText('');
+        setCapturedFramesCount(0);
+        setErrorMessage(capture.reason || 'Wajah tidak terdeteksi. Ulangi registrasi.');
+        return;
+      }
+
+      samples.push(capture.descriptor);
+      setCapturedFramesCount(i);
+      await new Promise((resolve) => setTimeout(resolve, 450));
+    }
+
+    // Kualitas enrolmen: semua sampel harus berasal dari orang yang sama
+    const spread = maxPairwiseDistance(samples);
+    if (spread > 0.4) {
+      setIsProcessing(false);
+      setProgressText('');
+      setCapturedFramesCount(0);
+      setErrorMessage(
+        `Sampel wajah tidak konsisten (selisih ${spread.toFixed(
+          2
+        )}). Pastikan hanya satu orang di depan kamera, wajah menghadap lurus, dan pencahayaan cukup. Ulangi registrasi.`
+      );
+      return;
+    }
+
+    setProgressText('Menyimpan template biometrik ke Google Sheets...');
+    const templateJson = buildFaceTemplate(samples);
+    const res = await registerFaceTemplate(currentUser.nik, templateJson);
 
     setIsProcessing(false);
+    setProgressText('');
     if (res.success) {
       setStep('completed');
     } else {
@@ -198,18 +227,26 @@ export const FaceRegistrationModal: React.FC<FaceRegistrationModalProps> = ({ on
                   >
                     <div className="text-[11px] text-white/90 bg-black/60 px-2.5 py-1 rounded-full backdrop-blur-xs font-mono">
                       {isProcessing
-                        ? `Sampling Frame ${capturedFramesCount}/4...`
-                        : 'Align Face in Frame'}
+                        ? `Merekam sampel ${capturedFramesCount}/5...`
+                        : engineStatus === 'loading'
+                        ? 'Memuat mesin wajah...'
+                        : 'Posisikan wajah di bingkai'}
                     </div>
                   </div>
                 </div>
 
                 {cameraError && (
-                  <div className="absolute bottom-2 left-2 right-2 bg-slate-900/90 text-slate-200 text-[11px] p-2 rounded-lg backdrop-blur-xs border border-slate-700 text-center">
-                    Synthetic vector generator active
+                  <div className="absolute bottom-2 left-2 right-2 bg-rose-900/90 text-rose-100 text-[11px] p-2 rounded-lg backdrop-blur-xs border border-rose-700 text-center">
+                    Kamera tidak aktif — registrasi wajah tidak dapat dilanjutkan
                   </div>
                 )}
               </div>
+
+              {progressText && !errorMessage && (
+                <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-800">
+                  {progressText}
+                </div>
+              )}
 
               {errorMessage && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
@@ -220,19 +257,24 @@ export const FaceRegistrationModal: React.FC<FaceRegistrationModalProps> = ({ on
 
               <button
                 type="button"
-                disabled={isProcessing}
+                disabled={isProcessing || engineStatus !== 'ready' || !cameraStream}
                 onClick={handleCaptureTemplate}
                 className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-2"
               >
                 {isProcessing ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Extracting Facial Landmarks...</span>
+                    <span>Memproses wajah...</span>
+                  </>
+                ) : engineStatus === 'loading' ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Memuat mesin pengenalan wajah...</span>
                   </>
                 ) : (
                   <>
                     <Scan className="w-4 h-4" />
-                    <span>Capture Face Embedding Vector</span>
+                    <span>Rekam Wajah (5 sampel)</span>
                   </>
                 )}
               </button>

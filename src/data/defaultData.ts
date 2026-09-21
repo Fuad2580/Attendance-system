@@ -15,6 +15,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   allowFaceRegistration: true,
   requireFaceRecognition: true,
   faceMatchThreshold: 0.70,
+  faceMaxDistance: 0.45,
   faceConsentRequired: true,
   allowClockIn: true,
   allowClockOut: true,

@@ -282,6 +282,133 @@ export async function fetchLiveFaceRegisters(spreadsheetId: string): Promise<Fac
 }
 
 /**
+ * Fetch every table straight from the Apps Script Web App.
+ * This is the reliable path: it works even when the spreadsheet is NOT shared publicly
+ * (the gviz endpoint above silently returns nothing in that case).
+ */
+export async function fetchAllDataViaGas(gasUrl: string): Promise<{
+  attendance: AttendanceRecord[];
+  manpower: Manpower[];
+  locations: LocationMaster[];
+  requests: RequestRecord[];
+  faceRegisters: FaceRegisterRecord[];
+} | null> {
+  if (!gasUrl) return null;
+  try {
+    const res = await sendGasAction(gasUrl, 'getAllData');
+    if (!res.success || !res.data) return null;
+    const d = res.data;
+
+    const attendance: AttendanceRecord[] = (d.attendance || []).map((r: any) => ({
+      attendanceId: String(r.attendanceId || ''),
+      nik: String(r.nik || '').trim(),
+      employeeName: String(r.employeeName || ''),
+      date: normalizeDateString(r.date),
+      time: String(r.time || ''),
+      type: String(r.type || '').toUpperCase() === 'OUT' ? 'OUT' : 'IN',
+      locationId: String(r.locationId || ''),
+      locationName: String(r.locationName || ''),
+      homebase: String(r.homebase || ''),
+      latitude: parseCoordinate(r.latitude),
+      longitude: parseCoordinate(r.longitude),
+      accuracy: parseCoordinate(r.accuracy),
+      distance: parseCoordinate(r.distance),
+      attendanceMode: String(r.attendanceMode || '').toUpperCase() === 'FLEXIBLE' ? 'FLEXIBLE' : 'STANDARD',
+      faceVerified: String(r.faceVerified).toUpperCase() === 'TRUE' || r.faceVerified === true,
+      status: (String(r.status || 'VERIFIED').toUpperCase() as any),
+      createdAt: String(r.createdAt || new Date().toISOString()),
+    }));
+
+    const manpower: Manpower[] = (d.manpower || []).map((r: any) => ({
+      nik: String(r.nik || '').trim(),
+      employeeName: String(r.employeeName || ''),
+      email: String(r.email || ''),
+      phone: String(r.phone || ''),
+      position: String(r.position || ''),
+      roleLevel: (String(r.roleLevel || 'R1').toUpperCase() as any),
+      department: String(r.department || ''),
+      homebaseLocationId: String(r.homebaseLocationId || ''),
+      flexibleAttendance: String(r.flexibleAttendance).toUpperCase() === 'TRUE' || r.flexibleAttendance === true,
+      supervisorNik: String(r.supervisorNik || ''),
+      status: String(r.status || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+      faceRegistered: String(r.faceRegistered).toUpperCase() === 'TRUE' || r.faceRegistered === true,
+      joinDate: String(r.joinDate || ''),
+      endDate: String(r.endDate || ''),
+    }));
+
+    const locations: LocationMaster[] = (d.locations || []).map((r: any) => ({
+      locationId: String(r.locationId || '').trim(),
+      locationName: String(r.locationName || ''),
+      locationType: String(r.locationType || ''),
+      address: String(r.address || ''),
+      latitude: parseCoordinate(r.latitude),
+      longitude: parseCoordinate(r.longitude),
+      radiusMeter: parseCoordinate(r.radiusMeter, 100),
+      status: String(r.status || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+    }));
+
+    const requests: RequestRecord[] = (d.requests || []).map((r: any) => ({
+      requestId: String(r.requestId || ''),
+      nik: String(r.nik || '').trim(),
+      employeeName: String(r.employeeName || ''),
+      requestType: (r.requestType as any) || 'Izin',
+      requestDate: normalizeDateString(r.startDate) || new Date().toISOString().split('T')[0],
+      startDate: normalizeDateString(r.startDate),
+      endDate: normalizeDateString(r.endDate),
+      startTime: String(r.startTime || ''),
+      endTime: String(r.endTime || ''),
+      reason: String(r.reason || ''),
+      attachment: String(r.attachment || ''),
+      status: (String(r.status || 'PENDING APPROVAL').toUpperCase() as any),
+      currentApproverNik: String(r.currentApproverNik || ''),
+      submittedAt: String(r.submittedAt || new Date().toISOString()),
+      approvedAt: r.approvedAt ? String(r.approvedAt) : undefined,
+      rejectedAt: r.rejectedAt ? String(r.rejectedAt) : undefined,
+      rejectionReason: r.rejectionReason ? String(r.rejectionReason) : undefined,
+    }));
+
+    const faceRegisters: FaceRegisterRecord[] = (d.faceRegisters || []).map((r: any) => ({
+      nik: String(r.nik || '').trim(),
+      employeeName: String(r.employeeName || ''),
+      faceTemplate: String(r.faceTemplate || ''),
+      registeredAt: String(r.registeredAt || ''),
+      updatedAt: String(r.updatedAt || ''),
+      status: (String(r.status || 'ACTIVE').toUpperCase() as any),
+    }));
+
+    return {
+      attendance: attendance.reverse(),
+      manpower,
+      locations,
+      requests: requests.reverse(),
+      faceRegisters,
+    };
+  } catch (err) {
+    console.warn('[SheetSync] fetchAllDataViaGas failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Asks the Apps Script backend whether this employee has already clocked in / out today.
+ * The spreadsheet is the single source of truth, so the UI never has to guess from stale local state.
+ */
+export async function fetchTodayStatusViaGas(
+  gasUrl: string,
+  nik: string
+): Promise<{ hasClockedIn: boolean; hasClockedOut: boolean; inTime?: string; outTime?: string } | null> {
+  if (!gasUrl || !nik) return null;
+  const res = await sendGasAction(gasUrl, 'getTodayStatus', { nik });
+  if (!res.success || !res.data) return null;
+  return {
+    hasClockedIn: !!res.data.hasClockedIn,
+    hasClockedOut: !!res.data.hasClockedOut,
+    inTime: res.data.inTime || undefined,
+    outTime: res.data.outTime || undefined,
+  };
+}
+
+/**
  * Send write action to Google Apps Script Web App
  */
 export async function sendGasAction(gasUrl: string, action: string, payload: any = {}): Promise<{ success: boolean; message: string; data?: any }> {

@@ -31,6 +31,24 @@ export function getJakartaTodayDate(): string {
 }
 
 /**
+ * Returns current time HH:mm:ss in Asia/Jakarta timezone (WIB, UTC+7)
+ */
+export function getJakartaTimeString(): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Jakarta',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    return formatter.format(new Date());
+  } catch (e) {
+    return new Date().toTimeString().split(' ')[0];
+  }
+}
+
+/**
  * Normalizes various date string formats into standard YYYY-MM-DD
  * Handles:
  * - "2026-09-20"
@@ -61,12 +79,17 @@ export function normalizeDateString(raw: string | null | undefined): string {
     return `${y}-${m}-${d}`;
   }
 
-  // Match DD/MM/YYYY or DD-MM-YYYY
+  // Match DD/MM/YYYY or MM/DD/YYYY (Google Sheets formatted value follows the sheet locale,
+  // so disambiguate: a part greater than 12 can only be the day)
   const dmyMatch = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
   if (dmyMatch) {
-    const d = dmyMatch[1].padStart(2, '0');
-    const m = dmyMatch[2].padStart(2, '0');
+    const first = parseInt(dmyMatch[1], 10);
+    const second = parseInt(dmyMatch[2], 10);
     const y = dmyMatch[3];
+    // Default Indonesian order is DD/MM, but if the second part is > 12 it must be MM/DD
+    const dayFirst = !(second > 12 && first <= 12);
+    const d = String(dayFirst ? first : second).padStart(2, '0');
+    const m = String(dayFirst ? second : first).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
 

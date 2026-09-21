@@ -12,8 +12,10 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import {
-  extractFaceEmbeddingFromVideo,
+  captureFaceDescriptor,
   verifyFaceAgainstTemplate,
+  loadFaceEngine,
+  DEFAULT_MAX_DISTANCE,
 } from '../utils/faceBiometrics';
 
 interface ClockModalProps {
@@ -44,6 +46,8 @@ export const ClockModal: React.FC<ClockModalProps> = ({
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [engineStatus, setEngineStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [engineError, setEngineError] = useState<string | null>(null);
   const [verificationResult, setVerificationResult] = useState<{
     success: boolean;
     score?: number;
@@ -86,6 +90,27 @@ export const ClockModal: React.FC<ClockModalProps> = ({
     };
   }, []);
 
+  // Preload face recognition models (once per session, cached by the browser)
+  useEffect(() => {
+    if (!config.requireFaceRecognition) {
+      setEngineStatus('ready');
+      return;
+    }
+    let cancelled = false;
+    loadFaceEngine()
+      .then(() => {
+        if (!cancelled) setEngineStatus('ready');
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setEngineStatus('error');
+        setEngineError(err?.message || 'Mesin pengenalan wajah gagal dimuat.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config.requireFaceRecognition]);
+
   const handleCaptureAndExecute = async () => {
     if (!currentUser) return;
     setIsVerifying(true);
@@ -101,7 +126,7 @@ export const ClockModal: React.FC<ClockModalProps> = ({
       // Lookup registered face template in FACE_REGISTER sheet
       const registered = faceRegisters.find((f) => f.nik === currentUser.nik);
 
-      if (!registered) {
+      if (!registered || !registered.faceTemplate) {
         setIsVerifying(false);
         setVerificationResult({
           success: false,
@@ -114,32 +139,48 @@ export const ClockModal: React.FC<ClockModalProps> = ({
         setIsVerifying(false);
         setVerificationResult({
           success: false,
-          message: 'Kamera aktif diperlukan untuk pemindaian wajah langsung.',
+          message: 'Kamera aktif wajib untuk verifikasi wajah. Izinkan akses kamera lalu ulangi.',
         });
         return;
       }
 
-      // Multi-frame verification: capture 2 distinct frames separated by 200ms
-      // Both frames must match the registered template independently to prevent false-positive bypass
-      const frame1 = extractFaceEmbeddingFromVideo(videoRef.current);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      const frame2 = extractFaceEmbeddingFromVideo(videoRef.current);
+      const maxDistance = config.faceMaxDistance || DEFAULT_MAX_DISTANCE;
 
-      const threshold = config.faceMatchThreshold || 0.65;
-      const comp1 = verifyFaceAgainstTemplate(frame1, registered.faceTemplate, threshold);
-      const comp2 = verifyFaceAgainstTemplate(frame2, registered.faceTemplate, threshold);
-
-      const avgScore = Math.round(((comp1.score + comp2.score) / 2) * 100) / 100;
-      biometricScore = avgScore;
-
-      // Both frames must match the threshold
-      if (!comp1.matched || !comp2.matched) {
+      // Dua pemindaian terpisah (jeda 400ms). Keduanya WAJIB cocok.
+      const capture1 = await captureFaceDescriptor(videoRef.current);
+      if (!capture1.ok || !capture1.descriptor) {
         setIsVerifying(false);
-        const lowestScore = Math.min(comp1.score, comp2.score);
+        setVerificationResult({ success: false, message: capture1.reason || 'Wajah tidak terdeteksi.' });
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      const capture2 = await captureFaceDescriptor(videoRef.current);
+      if (!capture2.ok || !capture2.descriptor) {
+        setIsVerifying(false);
+        setVerificationResult({ success: false, message: capture2.reason || 'Wajah tidak terdeteksi.' });
+        return;
+      }
+
+      const check1 = verifyFaceAgainstTemplate(capture1.descriptor, registered.faceTemplate, maxDistance);
+      const check2 = verifyFaceAgainstTemplate(capture2.descriptor, registered.faceTemplate, maxDistance);
+
+      biometricScore = Math.round(((check1.score + check2.score) / 2) * 100) / 100;
+
+      if (check1.needsReregistration || check2.needsReregistration) {
+        setIsVerifying(false);
+        setVerificationResult({ success: false, message: check1.message });
+        return;
+      }
+
+      if (!check1.matched || !check2.matched) {
+        const worst = check1.distance >= check2.distance ? check1 : check2;
+        setIsVerifying(false);
         setVerificationResult({
           success: false,
-          score: avgScore,
-          message: `Wajah tidak cocok! Tingkat kesesuaian hanya ${Math.round(lowestScore * 100)}% (Dibutuhkan minimal ${Math.round(threshold * 100)}%). Sistem mendeteksi wajah tidak sesuai dengan data master biometrik.`,
+          score: biometricScore,
+          message: worst.message,
         });
         return;
       }
@@ -331,6 +372,17 @@ export const ClockModal: React.FC<ClockModalProps> = ({
             </div>
           </div>
 
+          {/* Face engine status */}
+          {config.requireFaceRecognition && engineStatus === 'error' && (
+            <div className="p-3 rounded-xl border border-rose-200 bg-rose-50 text-rose-800 text-xs flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>
+                {engineError} Absensi wajah tidak bisa dijalankan tanpa mesin pengenalan wajah. Periksa koneksi
+                internet lalu buka ulang halaman ini.
+              </span>
+            </div>
+          )}
+
           {/* Verification Feedback Result */}
           {verificationResult && (
             <div
@@ -362,7 +414,11 @@ export const ClockModal: React.FC<ClockModalProps> = ({
 
           <button
             type="button"
-            disabled={isVerifying || (needsFaceRegistration ?? false)}
+            disabled={
+              isVerifying ||
+              (needsFaceRegistration ?? false) ||
+              (config.requireFaceRecognition && engineStatus !== 'ready')
+            }
             onClick={handleCaptureAndExecute}
             className={`w-2/3 py-2.5 px-4 font-bold rounded-xl text-xs text-white shadow-md transition-all flex items-center justify-center gap-2 ${
               type === 'IN'
@@ -373,7 +429,12 @@ export const ClockModal: React.FC<ClockModalProps> = ({
             {isVerifying ? (
               <>
                 <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Verifying & Recording...</span>
+                <span>Memverifikasi wajah...</span>
+              </>
+            ) : config.requireFaceRecognition && engineStatus === 'loading' ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>Memuat mesin pengenalan wajah...</span>
               </>
             ) : (
               <>
