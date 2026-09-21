@@ -255,3 +255,101 @@ Sheet LOCATION_MASTER dapat kolom baru dan Apps Script dapat logika baru, jadi:
 2. Tambahkan kolom **`Time Zone`** di kolom I sheet LOCATION_MASTER, isi `WIB`/`WITA`/`WIT`
    (boleh dikosongkan — akan dideteksi dari bujur).
 3. Deploy → Manage deployments → Edit → **New version** → Deploy.
+
+---
+
+# Perubahan keempat — jadwal, status, tim, dan rekap bulanan
+
+## 1. Peta dihapus
+
+Panel peta diganti kartu lokasi ringkas: nama kantor terdekat, jarak, radius, akurasi GPS,
+dan badge "Dalam jangkauan / Di luar radius". Iframe OpenStreetMap dibuang seluruhnya
+(halaman jadi lebih ringan dan tidak memanggil server luar).
+
+## 2. Jam berjalan
+
+Jam di kanan atas kini **berdetak tiap detik** sampai satuan detik (`14:21:07`) dan
+dibesarkan jadi `text-4xl` dengan angka tabular supaya lebarnya tidak goyang.
+
+## 3. Sheet baru: `SCHEDULE`
+
+Rancangan kolom (13 kolom):
+
+| Kolom | Isi | Contoh |
+|---|---|---|
+| Schedule ID | otomatis `SCH-<NIK>-<tgl berlaku>` | `SCH-1001-20240101` |
+| NIK | karyawan | `1001` |
+| Employee Name | nama | `Andi Pratama` |
+| Shift Name | nama shift | `Shift Pagi` |
+| Work Days | hari kerja, 0=Minggu…6=Sabtu | `1,2,3,4,5,6` |
+| Start Time | jam masuk | `08:00` |
+| End Time | jam pulang | `17:00` |
+| Break Minutes | menit istirahat | `60` |
+| Late Tolerance Minutes | toleransi sebelum dihitung telat | `10` |
+| Overtime After Minutes | lembur dihitung setelah sekian menit lewat jam pulang | `30` |
+| Effective Date | jadwal berlaku mulai | `2024-01-01` |
+| End Date | kosongkan kalau masih berlaku | |
+| Status | ACTIVE / INACTIVE | `ACTIVE` |
+
+**Kenapa pakai Effective Date, bukan satu baris per orang?** Kalau shift seseorang berubah
+bulan depan, baris lama tetap dipakai untuk menilai absensi bulan-bulan sebelumnya. Tanpa
+ini, mengubah jam masuk akan membuat riwayat lama ikut berubah status jadi "terlambat".
+Yang dipakai adalah baris dengan Effective Date terbaru yang ≤ tanggal absensi.
+
+Karyawan yang belum punya baris SCHEDULE otomatis memakai jam kerja umum di sheet CONFIG,
+jadi sistem tetap jalan walau sheet-nya masih kosong.
+
+Jadwal bisa diatur dari aplikasi: **Tim Saya → Atur Jadwal** (menulis ke sheet lewat
+action `saveSchedule`), atau langsung diketik di spreadsheet.
+
+## 4. Status yang dihitung
+
+Mesin status baru (`src/utils/schedule.ts`) menghasilkan:
+
+| Status | Warna | Kapan |
+|---|---|---|
+| Tepat Waktu | hijau | masuk ≤ jam masuk + toleransi |
+| Terlambat 25m | merah | lewat toleransi, selisihnya ditampilkan |
+| Sedang Bekerja / Belum Clock Out | kuning | sudah masuk, belum pulang (kuning tua kalau harinya sudah lewat) |
+| Tidak Hadir | merah tua | hari kerja terlewat tanpa absen |
+| Libur | abu | hari itu tidak ada di Work Days |
+| Cuti / Izin | biru | ada request cuti/izin **disetujui** yang mencakup tanggal itu |
+| Belum jadwalnya | abu terang | hari ini, jam masuk belum lewat — bukan alpha |
+
+**Lembur** muncul sebagai chip terpisah, sesuai permintaan Anda:
+
+- request lembur **belum disetujui** → oranye, `OT 2j belum di-approve`
+- request lembur **sudah disetujui** → hijau, `OT 2j disetujui`
+- lembur terdeteksi tapi **belum ada request** → abu, `OT 2j (belum diajukan)`
+
+Semua chip memakai ikon + teks, tidak hanya warna, supaya tetap terbaca saat dicetak
+hitam-putih atau oleh pengguna buta warna.
+
+## 5. Tab "Tim Saya"
+
+Muncul untuk R2 ke atas. Anggota diambil dari kolom **Supervisor NIK** di sheet MANPOWER
+(ADMIN melihat semua karyawan). Per anggota ditampilkan: jadwal berlaku, jam masuk/pulang
+hari ini, status hari ini + chip lembur, rekap bulan berjalan (hari hadir, jumlah
+terlambat, total lembur, pengajuan yang menunggu), dan tombol **Atur Jadwal**.
+
+## 6. Tab "Rekap Bulanan"
+
+Matriks karyawan (baris) × tanggal (kolom) seperti contoh yang Anda kirim:
+
+- kolom nama **sticky** di kiri, sisanya digeser ke samping;
+- tiap sel berisi kode: `OK` tepat waktu, `T` terlambat, `IN`/`BO` belum clock out,
+  `A` tidak hadir, `C` cuti/izin, `L` libur;
+- sel bergaris tepi **oranye** = ada lembur belum disetujui, **hijau** = sudah disetujui;
+- hover sel memunculkan tanggal + status lengkap;
+- kolom ringkasan di kanan: total hadir, terlambat, dan lembur bulan itu;
+- ada legenda, filter bulan, pencarian nama/NIK, dan tombol Lebarkan/Rapatkan.
+
+R1 hanya melihat barisnya sendiri; R2 melihat timnya; ADMIN melihat semua.
+
+## Deploy
+
+1. Salin ulang `Code.gs` dan `SetupSheets.gs` dari folder `apps-script/`.
+2. Jalankan `initializeRetailAttendanceSheets()` sekali — sheet **SCHEDULE** akan dibuat
+   beserta header dan tiga baris contoh. (Sheet lain yang sudah ada tidak diubah.)
+3. Deploy → Manage deployments → Edit → **New version** → Deploy.
+4. Isi jadwal tiap karyawan lewat menu **Tim Saya → Atur Jadwal**, atau langsung di sheet.

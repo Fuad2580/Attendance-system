@@ -60,6 +60,9 @@ function handleRequest(e) {
       case 'diagnose':
         result = Diagnose(params);
         break;
+      case 'saveSchedule':
+        result = Schedule_save(params);
+        break;
       case 'registerFace':
         result = Face_register(params);
         break;
@@ -451,6 +454,75 @@ function Attendance_clockOut(payload) {
 }
 
 /**
+ * Simpan / perbarui satu baris jadwal di sheet SCHEDULE.
+ * Baris dikenali dari Schedule ID; kalau belum ada, ditambahkan.
+ */
+function Schedule_save(payload) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    const ss = getSpreadsheet();
+    let sheet = ss.getSheetByName('SCHEDULE');
+
+    if (!sheet) {
+      sheet = ss.insertSheet('SCHEDULE');
+      sheet.appendRow(['Schedule ID', 'NIK', 'Employee Name', 'Shift Name', 'Work Days', 'Start Time', 'End Time', 'Break Minutes', 'Late Tolerance Minutes', 'Overtime After Minutes', 'Effective Date', 'End Date', 'Status']);
+      sheet.getRange(1, 1, 1, 13).setFontWeight('bold').setBackground('#E2E8F0');
+    }
+
+    if (!payload.nik) return { success: false, message: 'NIK wajib diisi.' };
+
+    const scheduleId = payload.scheduleId || ('SCH-' + nikToText(payload.nik) + '-' + String(payload.effectiveDate || '').replace(/-/g, ''));
+
+    const row = [
+      scheduleId,
+      nikToText(payload.nik),
+      payload.employeeName || '',
+      payload.shiftName || 'Shift',
+      payload.workDays || '1,2,3,4,5,6',
+      String(payload.startTime || '08:00'),
+      String(payload.endTime || '17:00'),
+      payload.breakMinutes === undefined ? 60 : Number(payload.breakMinutes),
+      payload.lateToleranceMinutes === undefined ? 0 : Number(payload.lateToleranceMinutes),
+      payload.overtimeAfterMinutes === undefined ? 30 : Number(payload.overtimeAfterMinutes),
+      String(payload.effectiveDate || ''),
+      String(payload.endDate || ''),
+      String(payload.status || 'ACTIVE').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE'
+    ];
+
+    const data = sheet.getDataRange().getValues();
+    let targetRow = 0;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]).trim() === String(scheduleId).trim()) {
+        targetRow = i + 1;
+        break;
+      }
+    }
+
+    if (targetRow > 0) {
+      sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+      targetRow = sheet.getLastRow();
+    }
+
+    // Jam & tanggal dipaksa teks agar tidak dikonversi Google Sheets
+    sheet.getRange(targetRow, 2).setNumberFormat('@').setValue(nikToText(payload.nik));
+    sheet.getRange(targetRow, 6, 1, 2).setNumberFormat('@').setValues([[row[5], row[6]]]);
+    sheet.getRange(targetRow, 11, 1, 2).setNumberFormat('@').setValues([[row[10], row[11]]]);
+    SpreadsheetApp.flush();
+
+    Audit_log(payload.nik, payload.employeeName, 'Schedule Update', scheduleId, '-', row[5] + '-' + row[6] + ' (' + row[4] + ')', 0, 0, 'Jadwal kerja disimpan ke sheet SCHEDULE');
+
+    return { success: true, message: 'Jadwal tersimpan.', scheduleId: scheduleId };
+  } catch (err) {
+    return { success: false, message: 'Gagal menyimpan jadwal: ' + err.toString() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
  * ALAT DIAGNOSA.
  * Buka di browser:  <URL Web App>/exec?action=diagnose&nik=1001
  * Hasilnya memperlihatkan spreadsheet mana yang dipakai, tanggal hari ini menurut script,
@@ -768,6 +840,11 @@ function Data_getAll() {
         ]),
         faceRegisters: Sheet_toObjects('FACE_REGISTER', [
           'nik', 'employeeName', 'faceTemplate', 'registeredAt', 'updatedAt', 'status'
+        ]),
+        schedules: Sheet_toObjects('SCHEDULE', [
+          'scheduleId', 'nik', 'employeeName', 'shiftName', 'workDays', 'startTime', 'endTime',
+          'breakMinutes', 'lateToleranceMinutes', 'overtimeAfterMinutes', 'effectiveDate',
+          'endDate', 'status'
         ]),
         config: Config_getAll().data || {},
         timestamp: new Date().toISOString()

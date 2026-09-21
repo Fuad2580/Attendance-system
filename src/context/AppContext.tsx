@@ -10,6 +10,7 @@ import {
   AuditLogRecord,
   NearestLocationResult,
   RequestType,
+  ScheduleRecord,
 } from '../types';
 import {
   DEFAULT_CONFIG,
@@ -40,6 +41,7 @@ import {
   fetchLiveRequests,
   fetchLiveConfig,
   fetchLiveFaceRegisters,
+  fetchLiveSchedules,
   fetchAllDataViaGas,
   fetchTodayStatusViaGas,
   sendGasAction,
@@ -76,6 +78,8 @@ interface AppContextType {
   refreshGPS: () => void;
   /** Zona waktu kantor terdekat (WIB / WITA / WIT). */
   activeZone: ZoneInfo;
+  schedules: ScheduleRecord[];
+  saveSchedule: (schedule: ScheduleRecord) => Promise<{ success: boolean; message: string }>;
 
   // Actions
   clockIn: (options?: { faceVerified?: boolean }) => Promise<{ success: boolean; message: string }>;
@@ -188,6 +192,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : DEFAULT_FACE_REGISTER;
   });
 
+  const [schedules, setSchedules] = useState<ScheduleRecord[]>(() => {
+    const saved = localStorage.getItem('retail_att_schedules');
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('retail_att_schedules', JSON.stringify(schedules));
+  }, [schedules]);
+
   const [auditLogs, setAuditLogs] = useState<AuditLogRecord[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
     return saved ? JSON.parse(saved) : DEFAULT_AUDIT_LOGS;
@@ -282,13 +299,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!spreadsheetId) return;
     try {
       setIsLiveSyncing(true);
-      let [liveAtt, liveReq, liveMan, liveLoc, liveCfg, liveFaces] = await Promise.all([
+      let [liveAtt, liveReq, liveMan, liveLoc, liveCfg, liveFaces, liveSchedules] = await Promise.all([
         fetchLiveAttendance(spreadsheetId),
         fetchLiveRequests(spreadsheetId),
         fetchLiveManpower(spreadsheetId),
         fetchLiveLocations(spreadsheetId),
         fetchLiveConfig(spreadsheetId),
         fetchLiveFaceRegisters(spreadsheetId),
+        fetchLiveSchedules(spreadsheetId),
       ]);
 
       // The gviz endpoint above only works when the spreadsheet is shared publicly.
@@ -306,6 +324,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (viaGas.locations.length > 0) liveLoc = viaGas.locations;
           if (viaGas.requests.length > 0) liveReq = viaGas.requests;
           if (viaGas.faceRegisters.length > 0) liveFaces = viaGas.faceRegisters;
+          if (viaGas.schedules.length > 0) liveSchedules = viaGas.schedules;
         }
       }
 
@@ -352,6 +371,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (Array.isArray(liveFaces)) {
         setFaceRegisters(liveFaces);
+      }
+
+      if (Array.isArray(liveSchedules) && liveSchedules.length > 0) {
+        setSchedules(liveSchedules);
       }
 
       setLastSyncTime(new Date());
@@ -763,6 +786,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
+  /**
+   * Menyimpan / memperbarui jadwal kerja seorang karyawan ke sheet SCHEDULE.
+   */
+  const saveSchedule = async (schedule: ScheduleRecord) => {
+    if (!gasUrl) {
+      return {
+        success: false,
+        message: 'Belum terhubung ke Google Apps Script, jadwal tidak dapat disimpan.',
+      };
+    }
+
+    const payload: ScheduleRecord = {
+      ...schedule,
+      scheduleId:
+        schedule.scheduleId ||
+        `SCH-${String(schedule.nik).trim()}-${String(schedule.effectiveDate || '').replace(/-/g, '')}`,
+    };
+
+    const res = await sendGasAction(gasUrl, 'saveSchedule', payload);
+    if (!res.success) {
+      return { success: false, message: `Gagal menyimpan jadwal: ${res.message}` };
+    }
+
+    setSchedules((prev) => {
+      const idx = prev.findIndex((s) => s.scheduleId === payload.scheduleId);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = payload;
+        return copy;
+      }
+      return [...prev, payload];
+    });
+
+    addAuditLog({
+      nik: currentUser?.nik || 'SYSTEM',
+      user: currentUser ? `${currentUser.employeeName} (${currentUser.roleLevel})` : 'System',
+      action: 'Schedule Update',
+      referenceId: payload.scheduleId,
+      oldValue: '-',
+      newValue: `${payload.startTime}-${payload.endTime} (${payload.workDays})`,
+      description: `Jadwal ${payload.employeeName} diperbarui, berlaku ${payload.effectiveDate}.`,
+    });
+
+    setTimeout(() => syncFromSpreadsheet(), 1000);
+    return { success: true, message: 'Jadwal tersimpan di sheet SCHEDULE.' };
+  };
+
   const registerFaceTemplate = async (nik: string, templateJson: string) => {
     const emp = manpower.find((m) => nikEquals(m.nik, nik));
     if (!emp) return { success: false, message: 'Employee not found.' };
@@ -1146,6 +1216,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         gpsError,
         refreshGPS,
         activeZone,
+        schedules,
+        saveSchedule,
         clockIn,
         clockOut,
         registerFaceTemplate,

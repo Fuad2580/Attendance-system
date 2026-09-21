@@ -3,6 +3,8 @@ import { useApp } from '../context/AppContext';
 import {
   LayoutDashboard,
   ClipboardList,
+  CalendarRange,
+  Users,
   FileText,
   CheckSquare,
   Settings2,
@@ -12,7 +14,7 @@ import {
   X,
 } from 'lucide-react';
 
-export type TabKey = 'dashboard' | 'log' | 'requests' | 'approvals' | 'admin';
+export type TabKey = 'dashboard' | 'log' | 'recap' | 'team' | 'requests' | 'approvals' | 'admin';
 
 interface SidebarProps {
   activeTab: TabKey;
@@ -40,6 +42,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const items: { key: TabKey; label: string; icon: React.ReactNode; show: boolean }[] = [
     { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, show: true },
     { key: 'log', label: 'Attendance Log', icon: <ClipboardList className="w-4 h-4" />, show: true },
+    { key: 'recap', label: 'Rekap Bulanan', icon: <CalendarRange className="w-4 h-4" />, show: true },
+    { key: 'team', label: 'Tim Saya', icon: <Users className="w-4 h-4" />, show: isSupervisor },
     { key: 'requests', label: 'Requests', icon: <FileText className="w-4 h-4" />, show: true },
     { key: 'approvals', label: 'Approvals', icon: <CheckSquare className="w-4 h-4" />, show: isSupervisor },
     { key: 'admin', label: 'Admin Panel', icon: <Settings2 className="w-4 h-4" />, show: isAdmin },

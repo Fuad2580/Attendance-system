@@ -53,6 +53,12 @@ function initializeRetailAttendanceSheets() {
     'APPROVAL': [
       ['Approval ID', 'Request ID', 'Approver NIK', 'Approver Name', 'Role', 'Action', 'Action Date', 'Comment']
     ],
+    'SCHEDULE': [
+      ['Schedule ID', 'NIK', 'Employee Name', 'Shift Name', 'Work Days', 'Start Time', 'End Time', 'Break Minutes', 'Late Tolerance Minutes', 'Overtime After Minutes', 'Effective Date', 'End Date', 'Status'],
+      ['SCH-1001-20240101', '1001', 'Andi Pratama', 'Shift Pagi', '1,2,3,4,5,6', '08:00', '17:00', 60, 10, 30, '2024-01-01', '', 'ACTIVE'],
+      ['SCH-1002-20240301', '1002', 'Citra Lestari', 'Shift Siang', '1,2,3,4,5', '13:00', '21:00', 60, 10, 30, '2024-03-01', '', 'ACTIVE'],
+      ['SCH-2001-20230510', '2001', 'Budi Santoso', 'Shift Pagi', '1,2,3,4,5,6', '08:00', '17:00', 60, 5, 30, '2023-05-10', '', 'ACTIVE']
+    ],
     'FACE_REGISTER': [
       ['NIK', 'Employee Name', 'Face Template', 'Registered At', 'Updated At', 'Status']
     ],
@@ -80,6 +86,15 @@ function initializeRetailAttendanceSheets() {
   if (attSheet) {
     attSheet.getRange('D2:E').setNumberFormat('@');
     attSheet.getRange('Q2:Q').setNumberFormat('@');
+  }
+
+  // Jadwal: NIK, jam, dan tanggal berlaku disimpan sebagai TEKS supaya "08:00" tidak
+  // berubah menjadi angka waktu dan "0012" tidak kehilangan nol di depan.
+  const schSheet = ss.getSheetByName('SCHEDULE');
+  if (schSheet) {
+    schSheet.getRange('B2:B').setNumberFormat('@');
+    schSheet.getRange('F2:G').setNumberFormat('@');
+    schSheet.getRange('K2:L').setNumberFormat('@');
   }
 
   // Kolom Face Template menampung JSON descriptor 128 dimensi: paksa teks juga.

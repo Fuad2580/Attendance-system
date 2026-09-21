@@ -4,7 +4,7 @@ import { isDateToday, nikEquals, normalizeDateString } from '../utils/dateUtils'
 import {
   dateInZone,
   longDateInZone,
-  clockInZone,
+  timeInZone,
   greetingInZone,
 } from '../utils/timezone';
 import {
@@ -12,7 +12,6 @@ import {
   ArrowRight,
   CalendarCheck,
   CameraOff,
-  CheckCircle2,
   Clock,
   Camera,
   LogIn,
@@ -22,7 +21,9 @@ import {
 } from 'lucide-react';
 import { ClockModal } from './ClockModal';
 import { FaceRegistrationModal } from './FaceRegistrationModal';
-import { LocationMapPanel } from './LocationMapPanel';
+import { LocationCard } from './LocationCard';
+import { StatusChip, OvertimeChip } from './StatusChip';
+import { computeDayStatus, resolveSchedule, minutesToLabel } from '../utils/schedule';
 import { WeeklyAttendanceChart } from './WeeklyAttendanceChart';
 import { RequestType, AttendanceRecord } from '../types';
 
@@ -45,11 +46,6 @@ function hoursBetween(start?: string, end?: string): string {
   const h = Math.floor(diff / 60);
   const m = diff % 60;
   return m === 0 ? `${h} jam` : `${h}j ${m}m`;
-}
-
-function isLate(time?: string, workStart?: string): boolean {
-  if (!time || !workStart) return false;
-  return time.substring(0, 5) > workStart.substring(0, 5);
 }
 
 const StatCard: React.FC<{
@@ -94,6 +90,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     requests,
     gasUrl,
     activeZone,
+    schedules,
   } = useApp();
 
   const [activeClockModal, setActiveClockModal] = useState<'IN' | 'OUT' | null>(null);
@@ -104,7 +101,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const previewRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    const id = setInterval(() => setClockTick(new Date()), 30000);
+    const id = setInterval(() => setClockTick(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -139,13 +136,45 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     (a) => nikEquals(a.nik, currentUser.nik) && isDateToday(a.date) && a.type === 'OUT'
   );
 
+  const nowTime = timeInZone(zone, clockTick).substring(0, 5);
+  const todaySchedule = resolveSchedule(currentUser.nik, todayKey, schedules, config);
+  const todayStatus = computeDayStatus({
+    date: todayKey,
+    nik: currentUser.nik,
+    inRecord: todayIn,
+    outRecord: todayOut,
+    schedule: todaySchedule,
+    requests,
+    today: todayKey,
+    nowTime,
+  });
+
   // ---- Statistik bulan berjalan untuk karyawan yang login ----
   const monthPrefix = todayKey.substring(0, 7);
   const myMonth = attendance.filter(
     (a) => nikEquals(a.nik, currentUser.nik) && normalizeDateString(a.date).startsWith(monthPrefix)
   );
-  const myInDays = new Set(myMonth.filter((a) => a.type === 'IN').map((a) => normalizeDateString(a.date)));
-  const lateDays = myMonth.filter((a) => a.type === 'IN' && isLate(a.time, config.workStartTime)).length;
+  const myInDays = new Set<string>(
+    myMonth.filter((a) => a.type === 'IN').map((a) => normalizeDateString(a.date))
+  );
+
+  let lateDays = 0;
+  let overtimeMinutes = 0;
+  myInDays.forEach((day) => {
+    const sched = resolveSchedule(currentUser.nik, day, schedules, config);
+    const st = computeDayStatus({
+      date: day,
+      nik: currentUser.nik,
+      inRecord: myMonth.find((a) => a.type === 'IN' && normalizeDateString(a.date) === day),
+      outRecord: myMonth.find((a) => a.type === 'OUT' && normalizeDateString(a.date) === day),
+      schedule: sched,
+      requests,
+      today: todayKey,
+      nowTime,
+    });
+    if (st.code === 'LATE') lateDays++;
+    if (st.overtime) overtimeMinutes += st.overtime.minutes;
+  });
   const onTimeDays = Math.max(0, myInDays.size - lateDays);
 
   const workingDaysSoFar = (() => {
@@ -181,13 +210,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   });
   const logRows = Array.from(byNik.entries()).map(([nik, v]) => {
     const emp = manpower.find((m) => nikEquals(m.nik, nik));
+    const sched = resolveSchedule(nik, todayKey, schedules, config);
+    const status = computeDayStatus({
+      date: todayKey,
+      nik,
+      inRecord: v.in,
+      outRecord: v.out,
+      schedule: sched,
+      requests,
+      today: todayKey,
+      nowTime,
+    });
     return {
       nik,
       name: emp?.employeeName || v.in?.employeeName || v.out?.employeeName || nik,
       inTime: v.in?.time,
       outTime: v.out?.time,
       location: v.in?.locationName || v.out?.locationName || '-',
-      late: isLate(v.in?.time, config.workStartTime),
+      schedule: `${sched.startTime}–${sched.endTime}`,
+      status,
     };
   });
 
@@ -221,7 +262,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* Sapaan + tanggal */}
+      {/* Sapaan + jam berjalan */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="w-11 h-11 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-sm shrink-0">
@@ -235,120 +276,130 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
         <div className="sm:text-right">
-          <p className="text-sm font-semibold text-slate-800">{longDateInZone(zone, clockTick)}</p>
-          <p className="text-xs text-slate-500 font-mono">
-            {clockInZone(zone, clockTick)} {zone.code}
+          <p className="text-3xl sm:text-4xl font-bold text-slate-900 font-mono tracking-tight tabular-nums leading-none">
+            {timeInZone(zone, clockTick)}
+          </p>
+          <p className="text-xs text-slate-500 mt-1.5">
+            {longDateInZone(zone, clockTick)} • {zone.code}
           </p>
         </div>
       </div>
 
-      {/* Hero widget + peta */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-4 sm:p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-bold text-slate-900">Aksi Cepat</h3>
-            <span className="text-[11px] text-slate-400">Zona {zone.label}</span>
+      {/* Hero widget */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5">
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <h3 className="text-sm font-bold text-slate-900">Aksi Cepat</h3>
+          <div className="flex items-center gap-2">
+            <StatusChip status={todayStatus} />
+            <OvertimeChip status={todayStatus} />
           </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="flex flex-col justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => setActiveClockModal(heroAction)}
-                className={`w-full py-6 px-4 rounded-2xl text-white font-bold text-base transition-all active:scale-98 flex items-center justify-center gap-2.5 ${
-                  heroAction === 'IN'
-                    ? 'bg-slate-900 hover:bg-slate-800'
-                    : 'bg-rose-600 hover:bg-rose-700'
-                }`}
-              >
-                {heroAction === 'IN' ? <LogIn className="w-5 h-5" /> : <LogOut className="w-5 h-5" />}
-                <span>{heroAction === 'IN' ? 'Check-In Sekarang' : 'Check-Out Sekarang'}</span>
-              </button>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-xl border border-slate-200 p-2.5">
-                  <p className="text-[11px] text-slate-500">Check-In</p>
-                  <p className="text-sm font-bold text-slate-900 font-mono">
-                    {todayIn?.time?.substring(0, 5) || '--:--'}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-slate-200 p-2.5">
-                  <p className="text-[11px] text-slate-500">Check-Out</p>
-                  <p className="text-sm font-bold text-slate-900 font-mono">
-                    {todayOut?.time?.substring(0, 5) || '--:--'}
-                  </p>
-                </div>
-              </div>
-
-              {todayOut && (
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Sudah check-out pukul {todayOut.time?.substring(0, 5)}. Check-out lagi akan
-                  <strong> menimpa</strong> jam tersebut.
-                </p>
-              )}
-            </div>
-
-            {/* Preview kamera */}
-            <div className="relative rounded-2xl overflow-hidden bg-slate-900 min-h-[150px] flex items-center justify-center">
-              {previewOn ? (
-                <video
-                  ref={previewRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                  style={{ transform: 'scaleX(-1)' }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPreviewError(null);
-                    setPreviewOn(true);
-                  }}
-                  className="flex flex-col items-center gap-2 text-slate-300 hover:text-white transition-colors px-4 py-6"
-                >
-                  {previewError ? <CameraOff className="w-7 h-7" /> : <Camera className="w-7 h-7" />}
-                  <span className="text-[11px] font-medium text-center">
-                    {previewError || 'Aktifkan pratinjau kamera'}
-                  </span>
-                </button>
-              )}
-              {previewOn && (
-                <span className="absolute top-2 left-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-xs">
-                  Pratinjau
-                </span>
-              )}
-            </div>
-          </div>
-
-          {config.requireFaceRecognition && !currentUser.faceRegistered && (
-            <button
-              onClick={() => setShowFaceRegModal(true)}
-              className="mt-3 w-full py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold hover:bg-amber-100 transition-colors"
-            >
-              Wajah belum terdaftar — daftarkan sekarang
-            </button>
-          )}
         </div>
 
-        <LocationMapPanel
-          latitude={userCoords.latitude}
-          longitude={userCoords.longitude}
-          accuracy={userCoords.accuracy}
-          geoStatus={geoStatus}
-          isFlexible={currentUser.flexibleAttendance}
-          isGpsLoading={isGpsLoading}
-          onRefresh={refreshGPS}
-        />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="flex flex-col justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => setActiveClockModal(heroAction)}
+              className={`w-full py-6 px-4 rounded-2xl text-white font-bold text-base transition-all active:scale-98 flex items-center justify-center gap-2.5 ${
+                heroAction === 'IN' ? 'bg-slate-900 hover:bg-slate-800' : 'bg-rose-600 hover:bg-rose-700'
+              }`}
+            >
+              {heroAction === 'IN' ? <LogIn className="w-5 h-5" /> : <LogOut className="w-5 h-5" />}
+              <span>{heroAction === 'IN' ? 'Check-In Sekarang' : 'Check-Out Sekarang'}</span>
+            </button>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-xl border border-slate-200 p-2.5">
+                <p className="text-[11px] text-slate-500">Check-In</p>
+                <p className="text-sm font-bold text-slate-900 font-mono">
+                  {todayIn?.time?.substring(0, 5) || '--:--'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-2.5">
+                <p className="text-[11px] text-slate-500">Check-Out</p>
+                <p className="text-sm font-bold text-slate-900 font-mono">
+                  {todayOut?.time?.substring(0, 5) || '--:--'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-2.5">
+                <p className="text-[11px] text-slate-500">Jadwal</p>
+                <p className="text-sm font-bold text-slate-900 font-mono">
+                  {todaySchedule.startTime}–{todaySchedule.endTime}
+                </p>
+              </div>
+            </div>
+
+            {todayOut && (
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Sudah check-out pukul {todayOut.time?.substring(0, 5)}. Check-out lagi akan
+                <strong> menimpa</strong> jam tersebut.
+              </p>
+            )}
+          </div>
+
+          {/* Preview kamera */}
+          <div className="relative rounded-2xl overflow-hidden bg-slate-900 min-h-[150px] flex items-center justify-center">
+            {previewOn ? (
+              <video
+                ref={previewRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+                style={{ transform: 'scaleX(-1)' }}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewError(null);
+                  setPreviewOn(true);
+                }}
+                className="flex flex-col items-center gap-2 text-slate-300 hover:text-white transition-colors px-4 py-6"
+              >
+                {previewError ? <CameraOff className="w-7 h-7" /> : <Camera className="w-7 h-7" />}
+                <span className="text-[11px] font-medium text-center">
+                  {previewError || 'Aktifkan pratinjau kamera'}
+                </span>
+              </button>
+            )}
+            {previewOn && (
+              <span className="absolute top-2 left-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-xs">
+                Pratinjau
+              </span>
+            )}
+          </div>
+        </div>
+
+        {config.requireFaceRecognition && !currentUser.faceRegistered && (
+          <button
+            onClick={() => setShowFaceRegModal(true)}
+            className="mt-3 w-full py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold hover:bg-amber-100 transition-colors"
+          >
+            Wajah belum terdaftar — daftarkan sekarang
+          </button>
+        )}
       </div>
+
+      <LocationCard
+        accuracy={userCoords.accuracy}
+        geoStatus={geoStatus}
+        isFlexible={currentUser.flexibleAttendance}
+        isGpsLoading={isGpsLoading}
+        onRefresh={refreshGPS}
+      />
 
       {/* Kartu statistik */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard label="Kehadiran" value={`${attendanceRate}%`} tone="emerald" icon={<TrendingUp className="w-4 h-4" />} />
         <StatCard label="Tepat Waktu" value={`${onTimeDays} Hari`} tone="sky" icon={<Clock className="w-4 h-4" />} />
         <StatCard label="Terlambat" value={`${lateDays} Hari`} tone="rose" icon={<AlertTriangle className="w-4 h-4" />} />
-        <StatCard label="Izin Disetujui" value={`${approvedLeave}`} tone="violet" icon={<CalendarCheck className="w-4 h-4" />} />
+        <StatCard
+          label="Lembur Bulan Ini"
+          value={overtimeMinutes > 0 ? minutesToLabel(overtimeMinutes) : '0m'}
+          tone="violet"
+          icon={<CalendarCheck className="w-4 h-4" />}
+        />
       </div>
 
       {/* Log hari ini + grafik */}
@@ -371,6 +422,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     <th className="px-4 sm:px-5 py-2.5 font-semibold">Nama</th>
                     <th className="px-3 py-2.5 font-semibold">Check-In</th>
                     <th className="px-3 py-2.5 font-semibold">Check-Out</th>
+                    <th className="px-3 py-2.5 font-semibold">Jadwal</th>
                     <th className="px-3 py-2.5 font-semibold">Total</th>
                     <th className="px-3 py-2.5 font-semibold">Status</th>
                     <th className="px-3 py-2.5 font-semibold">Lokasi</th>
@@ -389,19 +441,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </td>
                       <td className="px-3 py-3 font-mono text-slate-600">{row.inTime?.substring(0, 8) || '-'}</td>
                       <td className="px-3 py-3 font-mono text-slate-600">{row.outTime?.substring(0, 8) || '-'}</td>
+                      <td className="px-3 py-3 font-mono text-slate-500 whitespace-nowrap">{row.schedule}</td>
                       <td className="px-3 py-3 text-slate-600 whitespace-nowrap">
                         {hoursBetween(row.inTime, row.outTime)}
                       </td>
                       <td className="px-3 py-3">
-                        {row.late ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 font-semibold">
-                            <AlertTriangle className="w-3 h-3" /> Terlambat
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold">
-                            <CheckCircle2 className="w-3 h-3" /> Tepat Waktu
-                          </span>
-                        )}
+                        <div className="flex flex-col gap-1 items-start">
+                          <StatusChip status={row.status} compact />
+                          <OvertimeChip status={row.status} />
+                        </div>
                       </td>
                       <td className="px-3 py-3 text-slate-500 max-w-[160px] truncate">{row.location}</td>
                     </tr>

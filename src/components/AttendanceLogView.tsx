@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { nikEquals, normalizeDateString } from '../utils/dateUtils';
-import { dateInZone } from '../utils/timezone';
-import { Search, MapPin, CheckCircle2, AlertTriangle, ShieldCheck, ShieldOff } from 'lucide-react';
+import { dateInZone, timeInZone } from '../utils/timezone';
+import { computeDayStatus, resolveSchedule } from '../utils/schedule';
+import { StatusChip, OvertimeChip } from './StatusChip';
+import { Search, MapPin, ShieldCheck, ShieldOff } from 'lucide-react';
 import { AttendanceRecord } from '../types';
 
 interface DayRow {
@@ -25,7 +27,7 @@ function hoursBetween(start?: string, end?: string): string {
 }
 
 export const AttendanceLogView: React.FC = () => {
-  const { attendance, manpower, currentUser, config, activeZone } = useApp();
+  const { attendance, manpower, currentUser, config, activeZone, schedules, requests } = useApp();
   const [query, setQuery] = useState('');
   const [monthFilter, setMonthFilter] = useState(() => dateInZone(activeZone).substring(0, 7));
 
@@ -59,7 +61,8 @@ export const AttendanceLogView: React.FC = () => {
       .sort((a, b) => (a.date === b.date ? a.name.localeCompare(b.name) : b.date.localeCompare(a.date)));
   }, [attendance, manpower, monthFilter, query, canSeeTeam, currentUser]);
 
-  const workStart = config.workStartTime || '08:00';
+  const today = dateInZone(activeZone);
+  const nowTime = timeInZone(activeZone).substring(0, 5);
 
   return (
     <div className="space-y-4 pb-16">
@@ -100,6 +103,7 @@ export const AttendanceLogView: React.FC = () => {
                   <th className="px-3 py-2.5 font-semibold">Nama</th>
                   <th className="px-3 py-2.5 font-semibold">Masuk</th>
                   <th className="px-3 py-2.5 font-semibold">Pulang</th>
+                  <th className="px-3 py-2.5 font-semibold">Jadwal</th>
                   <th className="px-3 py-2.5 font-semibold">Total</th>
                   <th className="px-3 py-2.5 font-semibold">Status</th>
                   <th className="px-3 py-2.5 font-semibold">Wajah</th>
@@ -108,26 +112,34 @@ export const AttendanceLogView: React.FC = () => {
               </thead>
               <tbody>
                 {rows.map((r) => {
-                  const late = !!r.inRec?.time && r.inRec.time.substring(0, 5) > workStart.substring(0, 5);
+                  const schedule = resolveSchedule(r.nik, r.date, schedules, config);
+                  const status = computeDayStatus({
+                    date: r.date,
+                    nik: r.nik,
+                    inRecord: r.inRec,
+                    outRecord: r.outRec,
+                    schedule,
+                    requests,
+                    today,
+                    nowTime,
+                  });
                   return (
                     <tr key={`${r.date}-${r.nik}`} className="border-t border-slate-100">
                       <td className="px-4 sm:px-5 py-3 font-mono text-slate-600 whitespace-nowrap">{r.date}</td>
                       <td className="px-3 py-3 font-medium text-slate-800 whitespace-nowrap">{r.name}</td>
                       <td className="px-3 py-3 font-mono text-slate-600">{r.inRec?.time?.substring(0, 8) || '-'}</td>
                       <td className="px-3 py-3 font-mono text-slate-600">{r.outRec?.time?.substring(0, 8) || '-'}</td>
+                      <td className="px-3 py-3 font-mono text-slate-500 whitespace-nowrap">
+                        {schedule.startTime}–{schedule.endTime}
+                      </td>
                       <td className="px-3 py-3 text-slate-600 whitespace-nowrap">
                         {hoursBetween(r.inRec?.time, r.outRec?.time)}
                       </td>
                       <td className="px-3 py-3">
-                        {late ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 font-semibold">
-                            <AlertTriangle className="w-3 h-3" /> Terlambat
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold">
-                            <CheckCircle2 className="w-3 h-3" /> Tepat Waktu
-                          </span>
-                        )}
+                        <div className="flex flex-col gap-1 items-start">
+                          <StatusChip status={status} compact />
+                          <OvertimeChip status={status} />
+                        </div>
                       </td>
                       <td className="px-3 py-3">
                         {r.inRec?.faceVerified ? (

@@ -7,6 +7,7 @@ import {
   ApprovalRecord,
   FaceRegisterRecord,
   AuditLogRecord,
+  ScheduleRecord,
 } from '../types';
 import { normalizeDateString } from '../utils/dateUtils';
 
@@ -253,6 +254,43 @@ export async function fetchLiveRequests(spreadsheetId: string): Promise<RequestR
 }
 
 /**
+ * Fetch work schedules from SCHEDULE sheet
+ */
+export async function fetchLiveSchedules(spreadsheetId: string): Promise<ScheduleRecord[]> {
+  try {
+    const rawRows = await fetchGvizSheet(spreadsheetId, 'SCHEDULE');
+    if (!rawRows || rawRows.length === 0) return [];
+
+    const list: ScheduleRecord[] = [];
+    for (let i = 0; i < rawRows.length; i++) {
+      const row = rawRows[i];
+      const id = String(row[0] || '').trim();
+      if (!id || id.toLowerCase() === 'schedule id') continue;
+
+      list.push({
+        scheduleId: id,
+        nik: String(row[1] || '').trim(),
+        employeeName: String(row[2] || '').trim(),
+        shiftName: String(row[3] || '').trim(),
+        workDays: String(row[4] || '').trim(),
+        startTime: String(row[5] || '').trim(),
+        endTime: String(row[6] || '').trim(),
+        breakMinutes: parseCoordinate(row[7], 60),
+        lateToleranceMinutes: parseCoordinate(row[8], 0),
+        overtimeAfterMinutes: parseCoordinate(row[9], 30),
+        effectiveDate: normalizeDateString(row[10]),
+        endDate: normalizeDateString(row[11]),
+        status: String(row[12] || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+      });
+    }
+    return list;
+  } catch (err) {
+    console.warn('[SheetSync] fetchLiveSchedules failed:', err);
+    return [];
+  }
+}
+
+/**
  * Fetch all registered face templates from FACE_REGISTER sheet
  */
 export async function fetchLiveFaceRegisters(spreadsheetId: string): Promise<FaceRegisterRecord[]> {
@@ -293,6 +331,7 @@ export async function fetchAllDataViaGas(gasUrl: string): Promise<{
   locations: LocationMaster[];
   requests: RequestRecord[];
   faceRegisters: FaceRegisterRecord[];
+  schedules: ScheduleRecord[];
 } | null> {
   if (!gasUrl) return null;
   try {
@@ -378,12 +417,29 @@ export async function fetchAllDataViaGas(gasUrl: string): Promise<{
       status: (String(r.status || 'ACTIVE').toUpperCase() as any),
     }));
 
+    const schedules: ScheduleRecord[] = (d.schedules || []).map((r: any) => ({
+      scheduleId: String(r.scheduleId || ''),
+      nik: String(r.nik || '').trim(),
+      employeeName: String(r.employeeName || ''),
+      shiftName: String(r.shiftName || ''),
+      workDays: String(r.workDays || ''),
+      startTime: String(r.startTime || ''),
+      endTime: String(r.endTime || ''),
+      breakMinutes: parseCoordinate(r.breakMinutes, 60),
+      lateToleranceMinutes: parseCoordinate(r.lateToleranceMinutes, 0),
+      overtimeAfterMinutes: parseCoordinate(r.overtimeAfterMinutes, 30),
+      effectiveDate: normalizeDateString(r.effectiveDate),
+      endDate: normalizeDateString(r.endDate),
+      status: String(r.status || '').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+    }));
+
     return {
       attendance: attendance.reverse(),
       manpower,
       locations,
       requests: requests.reverse(),
       faceRegisters,
+      schedules,
     };
   } catch (err) {
     console.warn('[SheetSync] fetchAllDataViaGas failed:', err);

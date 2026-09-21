@@ -35,6 +35,30 @@ export interface AppConfig {
   requestRetentionDays: number;
 }
 
+/**
+ * Satu baris jadwal kerja di sheet SCHEDULE.
+ * Jadwal berlaku per karyawan dan per periode (effectiveDate .. endDate),
+ * sehingga perubahan shift tidak merusak riwayat absensi bulan sebelumnya.
+ */
+export interface ScheduleRecord {
+  scheduleId: string;
+  nik: string;
+  employeeName: string;
+  shiftName: string;
+  /** Hari kerja: 0=Minggu ... 6=Sabtu, mis. "1,2,3,4,5,6" */
+  workDays: string;
+  startTime: string;
+  endTime: string;
+  breakMinutes: number;
+  /** Menit toleransi sebelum dihitung terlambat */
+  lateToleranceMinutes: number;
+  /** Lembur baru dihitung setelah sekian menit lewat jam pulang */
+  overtimeAfterMinutes: number;
+  effectiveDate: string;
+  endDate?: string;
+  status: 'ACTIVE' | 'INACTIVE';
+}
+
 export interface Manpower {
   nik: string;
   employeeName: string;

@@ -4,6 +4,8 @@ import { Sidebar, TabKey } from './components/Sidebar';
 import { LoginScreen } from './components/LoginScreen';
 import { DashboardView } from './components/DashboardView';
 import { AttendanceLogView } from './components/AttendanceLogView';
+import { MonthlyRecapView } from './components/MonthlyRecapView';
+import { TeamView } from './components/TeamView';
 import { RequestsView } from './components/RequestsView';
 import { ApprovalsView } from './components/ApprovalsView';
 import { AdminDashboardView } from './components/AdminDashboardView';
@@ -40,6 +42,8 @@ const MainLayout: React.FC = () => {
   const titles: Record<TabKey, string> = {
     dashboard: 'Dashboard',
     log: 'Attendance Log',
+    recap: 'Rekap Bulanan',
+    team: 'Tim Saya',
     requests: 'Requests',
     approvals: 'Approvals',
     admin: 'Admin Panel',
@@ -107,6 +111,10 @@ const MainLayout: React.FC = () => {
           )}
 
           {activeTab === 'log' && <AttendanceLogView />}
+
+          {activeTab === 'recap' && <MonthlyRecapView />}
+
+          {activeTab === 'team' && <TeamView />}
 
           {activeTab === 'requests' && (
             <RequestsView
